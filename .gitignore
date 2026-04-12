@@ -1,0 +1,21 @@
+# Monorepo root generated files
+.dart_tool/
+build/
+buildlog.txt
+buildweblog.txt
+.idea/
+backups/
+
+# Flutter app generated files
+apps/flutter_app/.dart_tool/
+apps/flutter_app/build/
+apps/flutter_app/.flutter-plugins
+apps/flutter_app/.flutter-plugins-dependencies
+apps/flutter_app/.packages
+
+# OS / IDE
+Thumbs.db
+Desktop.ini
+
+# Optional local-only artifacts
+phase1 - Shortcut.lnk

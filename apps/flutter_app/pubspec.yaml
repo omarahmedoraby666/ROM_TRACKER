@@ -1,0 +1,34 @@
+name: rom_tracker_app
+description: "A new Flutter project."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flutter_screenutil: ^5.9.0
+  google_fonts: ^6.1.0
+  flutter_svg: ^2.0.9
+  file_picker: ^8.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/icons/
+    - assets/phase1/png1/
+    - assets/phase1/vector1/
+    - assets/phase2/png2/
+    - figma/19-1/
+    - figma/19-2/
+    - figma/19-3/
