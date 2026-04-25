@@ -48,15 +48,23 @@ For a real Android device on the same Wi-Fi as the laptop:
   - `patient@app.com`
   - `123456`
 
-- Doctor:
+- Approved Doctor:
   - `doctor@app.com`
+  - `123456`
+
+- Extra Approved Doctors:
+  - `sara.doctor@app.com`
+  - `123456`
+  - `lina.doctor@app.com`
+  - `123456`
+  - `ahmed.doctor@app.com`
   - `123456`
 
 ## AI Result Flow
 
 The backend is ready now even if the Unity AI module has not been delivered yet.
 
-Expected payload:
+Expected payload from Unity or any temporary mock sender:
 
 ```json
 {
@@ -69,8 +77,34 @@ Expected payload:
 The backend will:
 
 1. attach the result to the session
-2. generate a simple report summary
-3. return the saved result plus the report
+2. compare it against the patient's real previously recorded results for the same exercise
+3. generate a report using real recorded history such as:
+   - total recorded sessions
+   - total recorded reps
+   - average reps
+   - best reps
+   - previous reps
+   - trend
+4. return the saved result plus the report
+
+## Important Implemented Endpoints
+
+- `POST /api/auth/login`
+- `POST /api/auth/register/patient`
+- `POST /api/auth/register/doctor`
+- `GET /api/users/me`
+- `GET /api/doctor-application/status`
+- `GET /api/doctors`
+- `GET /api/doctors/{doctorId}`
+- `GET /api/doctors/{doctorId}/slots`
+- `POST /api/bookings`
+- `GET /api/sessions/patient`
+- `GET /api/sessions/doctor`
+- `GET /api/sessions/{sessionId}`
+- `PATCH /api/sessions/{sessionId}/status`
+- `POST /api/sessions/{sessionId}/ai-result`
+- `GET /api/sessions/{sessionId}/ai-report`
+- `GET /api/ai/patient-summary?exercise=Squat`
 
 ## Notes
 

@@ -110,6 +110,7 @@ def initialize_database() -> None:
                 report_summary TEXT NOT NULL,
                 performance_level TEXT NOT NULL,
                 recommendations TEXT NOT NULL,
+                report_metrics TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
                 FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -117,7 +118,20 @@ def initialize_database() -> None:
             );
             """
         )
+        ensure_migrations(connection)
         seed_database(connection)
+
+
+def ensure_migrations(connection: sqlite3.Connection) -> None:
+    ai_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(ai_results)").fetchall()
+    }
+    if "report_metrics" not in ai_columns:
+        connection.execute(
+            "ALTER TABLE ai_results ADD COLUMN report_metrics TEXT NOT NULL DEFAULT '{}'"
+        )
+        connection.commit()
 
 
 def seed_database(connection: sqlite3.Connection) -> None:
@@ -315,6 +329,129 @@ def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     with get_connection() as connection:
         row = connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         return row_to_dict(row)
+
+
+def create_patient_account(
+    *,
+    first_name: str,
+    last_name: str,
+    email: str,
+    password: str,
+    phone_code: Optional[str],
+    phone_number: Optional[str],
+    country: Optional[str],
+    gender: Optional[str],
+) -> Dict[str, Any]:
+    user_id = make_id("user")
+    created_at = now_iso()
+    full_name = f"{first_name.strip()} {last_name.strip()}"
+
+    with get_connection() as connection:
+        existing = connection.execute(
+            "SELECT id FROM users WHERE email = ?",
+            (email.lower(),),
+        ).fetchone()
+        if existing:
+            raise ValueError("Email already exists")
+
+        connection.execute(
+            """
+            INSERT INTO users (
+                id, role, first_name, last_name, full_name, email, password_hash,
+                phone_code, phone_number, country, gender, avatar_url, created_at
+            ) VALUES (?, 'patient', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            """,
+            (
+                user_id,
+                first_name.strip(),
+                last_name.strip(),
+                full_name,
+                email.lower(),
+                hash_password(password),
+                phone_code,
+                phone_number,
+                country,
+                gender,
+                created_at,
+            ),
+        )
+        connection.commit()
+
+    return get_user_by_id(user_id)
+
+
+def create_doctor_account(
+    *,
+    first_name: str,
+    last_name: str,
+    email: str,
+    password: str,
+    phone_code: Optional[str],
+    phone_number: Optional[str],
+    country: Optional[str],
+    gender: Optional[str],
+    specialization: str,
+    clinic_address: str,
+    experience_years: int,
+    session_price: int,
+    bio: str,
+) -> Dict[str, Any]:
+    user_id = make_id("user")
+    created_at = now_iso()
+    full_name = f"{first_name.strip()} {last_name.strip()}"
+
+    with get_connection() as connection:
+        existing = connection.execute(
+            "SELECT id FROM users WHERE email = ?",
+            (email.lower(),),
+        ).fetchone()
+        if existing:
+            raise ValueError("Email already exists")
+
+        connection.execute(
+            """
+            INSERT INTO users (
+                id, role, first_name, last_name, full_name, email, password_hash,
+                phone_code, phone_number, country, gender, avatar_url, created_at
+            ) VALUES (?, 'doctor', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+            """,
+            (
+                user_id,
+                first_name.strip(),
+                last_name.strip(),
+                full_name,
+                email.lower(),
+                hash_password(password),
+                phone_code,
+                phone_number,
+                country,
+                gender,
+                created_at,
+            ),
+        )
+
+        connection.execute(
+            """
+            INSERT INTO doctor_profiles (
+                user_id, specialization, clinic_address, experience_years,
+                session_price, bio, rating, approval_status
+            ) VALUES (?, ?, ?, ?, ?, ?, 0, 'pending')
+            """,
+            (
+                user_id,
+                specialization.strip(),
+                clinic_address.strip(),
+                experience_years,
+                session_price,
+                bio.strip(),
+            ),
+        )
+        connection.commit()
+
+    doctor = get_doctor_profile(user_id)
+    if not doctor:
+        raise ValueError("Doctor account was created but could not be loaded")
+    return doctor
 
 
 def get_doctor_profile(user_id: str) -> Optional[Dict[str, Any]]:
@@ -583,6 +720,113 @@ def generate_ai_report(exercise: str, reps: int) -> Dict[str, Any]:
     }
 
 
+def list_ai_results_for_patient_exercise(patient_id: str, exercise: str) -> List[Dict[str, Any]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM ai_results
+            WHERE patient_id = ? AND LOWER(exercise) = LOWER(?)
+            ORDER BY captured_at ASC, created_at ASC
+            """,
+            (patient_id, exercise),
+        ).fetchall()
+
+    results = []
+    for row in rows_to_dicts(rows):
+        row["raw_payload"] = json.loads(row["raw_payload"] or "{}")
+        row["recommendations"] = json.loads(row["recommendations"] or "[]")
+        row["report_metrics"] = json.loads(row.get("report_metrics") or "{}")
+        results.append(row)
+    return results
+
+
+def build_ai_report_from_history(
+    *,
+    patient_id: str,
+    exercise: str,
+    reps: int,
+    prior_results: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    normalized = exercise.strip().lower()
+    previous_reps = prior_results[-1]["reps"] if prior_results else None
+    all_reps = [item["reps"] for item in prior_results] + [reps]
+    total_sessions = len(all_reps)
+    total_reps = sum(all_reps)
+    average_reps = round(total_reps / total_sessions, 2)
+    best_reps = max(all_reps)
+    latest_delta = reps - previous_reps if previous_reps is not None else None
+
+    if previous_reps is None:
+        trend = "first_record"
+    elif reps > previous_reps:
+        trend = "improved"
+    elif reps < previous_reps:
+        trend = "declined"
+    else:
+        trend = "stable"
+
+    if average_reps >= 12:
+        level = "excellent"
+    elif average_reps >= 8:
+        level = "good"
+    elif average_reps >= 4:
+        level = "needs_improvement"
+    else:
+        level = "insufficient"
+
+    if trend == "first_record":
+        summary = (
+            f"This is the first recorded {exercise} result for the patient, "
+            f"with {reps} valid repetitions."
+        )
+    else:
+        direction = "higher" if latest_delta and latest_delta > 0 else "lower" if latest_delta and latest_delta < 0 else "unchanged"
+        summary = (
+            f"The patient now has {total_sessions} recorded {exercise} result(s). "
+            f"The latest result is {reps} reps, which is {direction} than the previous recorded result. "
+            f"The running average is {average_reps} reps and the best recorded result is {best_reps} reps."
+        )
+
+    recommendations = [
+        "Use the recorded trend to guide the next exercise target rather than depending on a single result only.",
+        "Compare the next session against both the average and the best recorded repetition count.",
+    ]
+
+    if trend == "improved":
+        recommendations.append("The patient is improving. Consider a small progression while preserving safe form.")
+    elif trend == "declined":
+        recommendations.append("Performance declined versus the previous attempt. Re-check fatigue, pain, and technique.")
+    elif trend == "stable":
+        recommendations.append("Performance is stable. Focus on consistency and controlled execution before progressing.")
+    else:
+        recommendations.append("This is the baseline measurement for future comparison.")
+
+    if normalized == "squat":
+        recommendations.append("Track squat depth and knee alignment together with rep count in future sessions.")
+    elif normalized == "seated leg extension":
+        recommendations.append("Track terminal extension quality and avoid pushing into hyperextension.")
+
+    metrics = {
+        "totalRecordedSessions": total_sessions,
+        "totalRecordedReps": total_reps,
+        "averageReps": average_reps,
+        "bestReps": best_reps,
+        "previousReps": previous_reps,
+        "latestReps": reps,
+        "latestDelta": latest_delta,
+        "trend": trend,
+    }
+
+    return {
+        "title": f"{exercise} progress report",
+        "summary": summary,
+        "performanceLevel": level,
+        "recommendations": recommendations,
+        "metrics": metrics,
+    }
+
+
 def upsert_ai_result(
     *,
     session_id: str,
@@ -595,7 +839,14 @@ def upsert_ai_result(
     if not session:
         raise ValueError("Session not found")
 
-    report = generate_ai_report(exercise, reps)
+    prior_results = list_ai_results_for_patient_exercise(session["patient_id"], exercise)
+    prior_results = [item for item in prior_results if item["session_id"] != session_id]
+    report = build_ai_report_from_history(
+        patient_id=session["patient_id"],
+        exercise=exercise,
+        reps=reps,
+        prior_results=prior_results,
+    )
     created_at = now_iso()
     existing = get_ai_result(session_id)
 
@@ -612,6 +863,7 @@ def upsert_ai_result(
                     report_summary = ?,
                     performance_level = ?,
                     recommendations = ?,
+                    report_metrics = ?,
                     created_at = ?
                 WHERE session_id = ?
                 """,
@@ -624,6 +876,7 @@ def upsert_ai_result(
                     report["summary"],
                     report["performanceLevel"],
                     json.dumps(report["recommendations"]),
+                    json.dumps(report["metrics"]),
                     created_at,
                     session_id,
                 ),
@@ -634,8 +887,8 @@ def upsert_ai_result(
                 INSERT INTO ai_results (
                     id, session_id, patient_id, doctor_id, exercise, reps,
                     captured_at, raw_payload, report_title, report_summary,
-                    performance_level, recommendations, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    performance_level, recommendations, report_metrics, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     make_id("ai"),
@@ -650,6 +903,7 @@ def upsert_ai_result(
                     report["summary"],
                     report["performanceLevel"],
                     json.dumps(report["recommendations"]),
+                    json.dumps(report["metrics"]),
                     created_at,
                 ),
             )
@@ -669,4 +923,5 @@ def get_ai_result(session_id: str) -> Optional[Dict[str, Any]]:
         data = dict(row)
         data["raw_payload"] = json.loads(data["raw_payload"] or "{}")
         data["recommendations"] = json.loads(data["recommendations"] or "[]")
+        data["report_metrics"] = json.loads(data.get("report_metrics") or "{}")
         return data

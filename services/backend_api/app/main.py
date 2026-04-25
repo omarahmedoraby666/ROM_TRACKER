@@ -8,7 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import get_current_user, issue_access_token, require_role
 from .database import (
+    create_doctor_account,
     create_booking,
+    create_patient_account,
     get_ai_result,
     get_doctor_profile,
     get_session,
@@ -19,10 +21,20 @@ from .database import (
     list_sessions_for_doctor,
     list_sessions_for_patient,
     list_slots_for_doctor,
+    list_ai_results_for_patient_exercise,
     update_session_status,
     upsert_ai_result,
 )
-from .schemas import AIResultRequest, BookingRequest, DoctorsListResponse, LoginRequest, SessionStatusRequest, SlotsResponse
+from .schemas import (
+    AIResultRequest,
+    BookingRequest,
+    DoctorsListResponse,
+    LoginRequest,
+    RegisterDoctorRequest,
+    RegisterPatientRequest,
+    SessionStatusRequest,
+    SlotsResponse,
+)
 
 
 def error_response(
@@ -135,6 +147,7 @@ def serialize_ai_result(result: Dict[str, Any]) -> Dict[str, Any]:
             "summary": result["report_summary"],
             "performanceLevel": result["performance_level"],
             "recommendations": result["recommendations"],
+            "metrics": result.get("report_metrics") or {},
         },
     }
 
@@ -181,9 +194,82 @@ def login(payload: LoginRequest):
     }
 
 
+@app.post("/api/auth/register/patient")
+def register_patient(payload: RegisterPatientRequest):
+    try:
+        user = create_patient_account(
+            first_name=payload.firstName,
+            last_name=payload.lastName,
+            email=payload.email,
+            password=payload.password,
+            phone_code=payload.phoneCode,
+            phone_number=payload.phoneNumber,
+            country=payload.country,
+            gender=payload.gender,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(str(exc), "PATIENT_REGISTER_FAILED"),
+        ) from exc
+
+    token = issue_access_token(user["id"])
+    return {
+        "message": "Patient account created successfully",
+        "accessToken": token,
+        "user": serialize_user(user),
+    }
+
+
+@app.post("/api/auth/register/doctor")
+def register_doctor(payload: RegisterDoctorRequest):
+    try:
+        doctor = create_doctor_account(
+            first_name=payload.firstName,
+            last_name=payload.lastName,
+            email=payload.email,
+            password=payload.password,
+            phone_code=payload.phoneCode,
+            phone_number=payload.phoneNumber,
+            country=payload.country,
+            gender=payload.gender,
+            specialization=payload.specialization,
+            clinic_address=payload.clinicAddress,
+            experience_years=payload.experienceYears,
+            session_price=payload.sessionPrice,
+            bio=payload.bio,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(str(exc), "DOCTOR_REGISTER_FAILED"),
+        ) from exc
+
+    token = issue_access_token(doctor["id"])
+    return {
+        "message": "Doctor account created successfully and is pending approval",
+        "accessToken": token,
+        "user": serialize_user(doctor),
+    }
+
+
 @app.get("/api/users/me")
 def get_me(current_user=Depends(get_current_user)):
     return serialize_user(current_user)
+
+
+@app.get("/api/doctor-application/status")
+def get_doctor_application_status(doctor=Depends(require_role("doctor"))):
+    profile = get_doctor_profile(doctor["id"])
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_response("Doctor profile not found", "DOCTOR_PROFILE_NOT_FOUND"),
+        )
+    return {
+        "doctorId": doctor["id"],
+        "approvalStatus": profile["approval_status"],
+    }
 
 
 @app.get("/api/doctors", response_model=DoctorsListResponse)
@@ -368,3 +454,20 @@ def get_ai_report(session_id: str, current_user=Depends(get_current_user)):
         )
 
     return serialize_ai_result(ai_result)
+
+
+@app.get("/api/ai/patient-summary")
+def get_patient_ai_summary(
+    exercise: str = Query(..., min_length=2),
+    patient=Depends(require_role("patient")),
+):
+    results = list_ai_results_for_patient_exercise(patient["id"], exercise)
+    items = [serialize_ai_result(item) for item in results]
+    latest = items[-1] if items else None
+    return {
+        "exercise": exercise,
+        "patientId": patient["id"],
+        "count": len(items),
+        "latest": latest,
+        "items": items,
+    }
