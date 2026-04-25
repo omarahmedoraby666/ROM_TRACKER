@@ -13,6 +13,11 @@ apps/flutter_app/.flutter-plugins
 apps/flutter_app/.flutter-plugins-dependencies
 apps/flutter_app/.packages
 
+# Backend generated files
+services/backend_api/data/
+services/backend_api/app/__pycache__/
+services/backend_api/.venv/
+
 # OS / IDE
 Thumbs.db
 Desktop.ini
