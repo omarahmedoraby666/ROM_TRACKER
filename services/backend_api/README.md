@@ -96,15 +96,33 @@ The backend will:
 - `GET /api/doctor-application/status`
 - `GET /api/doctors`
 - `GET /api/doctors/{doctorId}`
+- `GET /api/doctors/{doctorId}/reviews`
 - `GET /api/doctors/{doctorId}/slots`
 - `POST /api/bookings`
+- `GET /api/notifications`
+- `PATCH /api/notifications/{notificationId}/read`
+- `GET /api/wishlist`
+- `POST /api/wishlist/{doctorId}`
+- `DELETE /api/wishlist/{doctorId}`
 - `GET /api/sessions/patient`
 - `GET /api/sessions/doctor`
 - `GET /api/sessions/{sessionId}`
+- `POST /api/sessions/{sessionId}/start`
 - `PATCH /api/sessions/{sessionId}/status`
+- `POST /api/sessions/{sessionId}/review`
 - `POST /api/sessions/{sessionId}/ai-result`
 - `GET /api/sessions/{sessionId}/ai-report`
 - `GET /api/ai/patient-summary?exercise=Squat`
+- `GET /api/reviews/patient`
+
+## Product Logic Already Implemented
+
+- Booking creates notifications for both patient and doctor.
+- Session start creates a doctor notification.
+- Completing or canceling a session creates notifications for both sides.
+- Reviews are limited to completed sessions and create a doctor notification.
+- Wishlist is stored per patient and linked to real doctor records.
+- AI reports are based on the patient's actual recorded history for the same exercise, not only the latest single result.
 
 ## Notes
 

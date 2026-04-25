@@ -89,6 +89,7 @@ def initialize_database() -> None:
                 doctor_notes TEXT,
                 review TEXT,
                 review_rating INTEGER,
+                started_at TEXT,
                 payment_status TEXT NOT NULL DEFAULT 'paid',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -116,6 +117,43 @@ def initialize_database() -> None:
                 FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (doctor_id) REFERENCES users(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS notifications (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body TEXT NOT NULL,
+                related_session_id TEXT,
+                related_doctor_id TEXT,
+                related_patient_id TEXT,
+                is_read INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS wishlists (
+                id TEXT PRIMARY KEY,
+                patient_id TEXT NOT NULL,
+                doctor_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(patient_id, doctor_id),
+                FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (doctor_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS reviews (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL UNIQUE,
+                patient_id TEXT NOT NULL,
+                doctor_id TEXT NOT NULL,
+                rating INTEGER NOT NULL,
+                comment TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (doctor_id) REFERENCES users(id) ON DELETE CASCADE
+            );
             """
         )
         ensure_migrations(connection)
@@ -130,6 +168,16 @@ def ensure_migrations(connection: sqlite3.Connection) -> None:
     if "report_metrics" not in ai_columns:
         connection.execute(
             "ALTER TABLE ai_results ADD COLUMN report_metrics TEXT NOT NULL DEFAULT '{}'"
+        )
+        connection.commit()
+
+    session_columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(sessions)").fetchall()
+    }
+    if "started_at" not in session_columns:
+        connection.execute(
+            "ALTER TABLE sessions ADD COLUMN started_at TEXT"
         )
         connection.commit()
 
@@ -331,6 +379,85 @@ def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
         return row_to_dict(row)
 
 
+def create_notification(
+    *,
+    user_id: str,
+    type_: str,
+    title: str,
+    body: str,
+    related_session_id: Optional[str] = None,
+    related_doctor_id: Optional[str] = None,
+    related_patient_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    notification_id = make_id("notification")
+    created_at = now_iso()
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO notifications (
+                id, user_id, type, title, body, related_session_id,
+                related_doctor_id, related_patient_id, is_read, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+            """,
+            (
+                notification_id,
+                user_id,
+                type_,
+                title,
+                body,
+                related_session_id,
+                related_doctor_id,
+                related_patient_id,
+                created_at,
+            ),
+        )
+        connection.commit()
+
+    return get_notification(notification_id, user_id)
+
+
+def get_notification(notification_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT *
+            FROM notifications
+            WHERE id = ? AND user_id = ?
+            """,
+            (notification_id, user_id),
+        ).fetchone()
+        return row_to_dict(row)
+
+
+def list_notifications_for_user(user_id: str) -> List[Dict[str, Any]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT *
+            FROM notifications
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+        return rows_to_dicts(rows)
+
+
+def mark_notification_read(notification_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE notifications
+            SET is_read = 1
+            WHERE id = ? AND user_id = ?
+            """,
+            (notification_id, user_id),
+        )
+        connection.commit()
+    return get_notification(notification_id, user_id)
+
+
 def create_patient_account(
     *,
     first_name: str,
@@ -469,6 +596,62 @@ def get_doctor_profile(user_id: str) -> Optional[Dict[str, Any]]:
         return row_to_dict(row)
 
 
+def list_wishlist_for_patient(patient_id: str) -> List[Dict[str, Any]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT w.id AS wishlist_id, w.created_at AS wishlist_created_at,
+                   u.*, dp.specialization, dp.clinic_address, dp.experience_years,
+                   dp.session_price, dp.bio, dp.rating, dp.approval_status
+            FROM wishlists w
+            JOIN users u ON u.id = w.doctor_id
+            JOIN doctor_profiles dp ON dp.user_id = u.id
+            WHERE w.patient_id = ?
+            ORDER BY w.created_at DESC
+            """,
+            (patient_id,),
+        ).fetchall()
+        return rows_to_dicts(rows)
+
+
+def add_doctor_to_wishlist(patient_id: str, doctor_id: str) -> Dict[str, Any]:
+    doctor = get_doctor_profile(doctor_id)
+    if not doctor:
+        raise ValueError("Doctor not found")
+
+    existing = any(item["id"] == doctor_id for item in list_wishlist_for_patient(patient_id))
+    if existing:
+        raise ValueError("Doctor is already in wishlist")
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO wishlists (id, patient_id, doctor_id, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (make_id("wishlist"), patient_id, doctor_id, now_iso()),
+        )
+        connection.commit()
+
+    item = next((item for item in list_wishlist_for_patient(patient_id) if item["id"] == doctor_id), None)
+    if not item:
+        raise ValueError("Wishlist item could not be loaded")
+    return item
+
+
+def remove_doctor_from_wishlist(patient_id: str, doctor_id: str) -> bool:
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            DELETE FROM wishlists
+            WHERE patient_id = ? AND doctor_id = ?
+            """,
+            (patient_id, doctor_id),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+
+
 def list_doctors(search: Optional[str] = None, specialization: Optional[str] = None) -> List[Dict[str, Any]]:
     query = """
         SELECT u.*, dp.specialization, dp.clinic_address, dp.experience_years,
@@ -579,6 +762,25 @@ def create_booking(
     session = get_session(session_id)
     if not session:
         raise ValueError("Booking was created but could not be loaded")
+
+    create_notification(
+        user_id=patient_id,
+        type_="booking_confirmed",
+        title="Session booked",
+        body=f"Your session with {session['doctor_name']} has been confirmed.",
+        related_session_id=session_id,
+        related_doctor_id=doctor_id,
+        related_patient_id=patient_id,
+    )
+    create_notification(
+        user_id=doctor_id,
+        type_="new_booking",
+        title="New booked session",
+        body=f"{session['patient_name']} booked a new session with you.",
+        related_session_id=session_id,
+        related_doctor_id=doctor_id,
+        related_patient_id=patient_id,
+    )
     return session
 
 
@@ -673,6 +875,45 @@ def update_session_status(
     session = get_session(session_id)
     if not session:
         raise ValueError("Session was updated but could not be reloaded")
+
+    if status == "completed":
+        create_notification(
+            user_id=session["patient_id"],
+            type_="session_completed",
+            title="Session completed",
+            body=f"Your session with {session['doctor_name']} was marked as completed.",
+            related_session_id=session_id,
+            related_doctor_id=session["doctor_id"],
+            related_patient_id=session["patient_id"],
+        )
+        create_notification(
+            user_id=session["doctor_id"],
+            type_="session_completed",
+            title="Session completed",
+            body=f"The session with {session['patient_name']} was marked as completed.",
+            related_session_id=session_id,
+            related_doctor_id=session["doctor_id"],
+            related_patient_id=session["patient_id"],
+        )
+    elif status == "canceled":
+        create_notification(
+            user_id=session["patient_id"],
+            type_="session_canceled",
+            title="Session canceled",
+            body=f"Your session with {session['doctor_name']} was canceled.",
+            related_session_id=session_id,
+            related_doctor_id=session["doctor_id"],
+            related_patient_id=session["patient_id"],
+        )
+        create_notification(
+            user_id=session["doctor_id"],
+            type_="session_canceled",
+            title="Session canceled",
+            body=f"The session with {session['patient_name']} was canceled.",
+            related_session_id=session_id,
+            related_doctor_id=session["doctor_id"],
+            related_patient_id=session["patient_id"],
+        )
     return session
 
 
@@ -825,6 +1066,160 @@ def build_ai_report_from_history(
         "recommendations": recommendations,
         "metrics": metrics,
     }
+
+
+def submit_session_review(
+    *,
+    session_id: str,
+    patient_id: str,
+    rating: int,
+    comment: str,
+) -> Dict[str, Any]:
+    session = get_session(session_id)
+    if not session:
+        raise ValueError("Session not found")
+    if session["patient_id"] != patient_id:
+        raise ValueError("You cannot review this session")
+    if session["status"] != "completed":
+        raise ValueError("Only completed sessions can be reviewed")
+
+    created_at = now_iso()
+    with get_connection() as connection:
+        existing = connection.execute(
+            "SELECT id FROM reviews WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if existing:
+            connection.execute(
+                """
+                UPDATE reviews
+                SET rating = ?, comment = ?, created_at = ?
+                WHERE session_id = ?
+                """,
+                (rating, comment, created_at, session_id),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO reviews (
+                    id, session_id, patient_id, doctor_id, rating, comment, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    make_id("review"),
+                    session_id,
+                    patient_id,
+                    session["doctor_id"],
+                    rating,
+                    comment,
+                    created_at,
+                ),
+            )
+
+        connection.execute(
+            """
+            UPDATE sessions
+            SET review = ?, review_rating = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (comment, rating, created_at, session_id),
+        )
+        connection.commit()
+
+    create_notification(
+        user_id=session["doctor_id"],
+        type_="review",
+        title="New patient review",
+        body=f"{session['patient_name']} left a review for your session.",
+        related_session_id=session_id,
+        related_doctor_id=session["doctor_id"],
+        related_patient_id=patient_id,
+    )
+
+    review = get_review_by_session(session_id)
+    if not review:
+        raise ValueError("Review could not be loaded")
+    return review
+
+
+def get_review_by_session(session_id: str) -> Optional[Dict[str, Any]]:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT r.*, p.full_name AS patient_name, d.full_name AS doctor_name
+            FROM reviews r
+            JOIN users p ON p.id = r.patient_id
+            JOIN users d ON d.id = r.doctor_id
+            WHERE r.session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+        return row_to_dict(row)
+
+
+def list_reviews_for_patient(patient_id: str) -> List[Dict[str, Any]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT r.*, p.full_name AS patient_name, d.full_name AS doctor_name
+            FROM reviews r
+            JOIN users p ON p.id = r.patient_id
+            JOIN users d ON d.id = r.doctor_id
+            WHERE r.patient_id = ?
+            ORDER BY r.created_at DESC
+            """,
+            (patient_id,),
+        ).fetchall()
+        return rows_to_dicts(rows)
+
+
+def list_reviews_for_doctor(doctor_id: str) -> List[Dict[str, Any]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT r.*, p.full_name AS patient_name, d.full_name AS doctor_name
+            FROM reviews r
+            JOIN users p ON p.id = r.patient_id
+            JOIN users d ON d.id = r.doctor_id
+            WHERE r.doctor_id = ?
+            ORDER BY r.created_at DESC
+            """,
+            (doctor_id,),
+        ).fetchall()
+        return rows_to_dicts(rows)
+
+
+def start_session(session_id: str, started_at: Optional[str]) -> Dict[str, Any]:
+    session = get_session(session_id)
+    if not session:
+        raise ValueError("Session not found")
+
+    effective_started_at = started_at or now_iso()
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE sessions
+            SET started_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (effective_started_at, now_iso(), session_id),
+        )
+        connection.commit()
+
+    updated = get_session(session_id)
+    if not updated:
+        raise ValueError("Session was started but could not be loaded")
+
+    create_notification(
+        user_id=updated["doctor_id"],
+        type_="session_started",
+        title="Session started",
+        body=f"{updated['patient_name']} started the AI-assisted session.",
+        related_session_id=session_id,
+        related_doctor_id=updated["doctor_id"],
+        related_patient_id=updated["patient_id"],
+    )
+    return updated
 
 
 def upsert_ai_result(

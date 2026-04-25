@@ -53,6 +53,15 @@ class SessionStatusRequest(BaseModel):
     reviewRating: Optional[int] = Field(default=None, ge=1, le=5)
 
 
+class SessionStartRequest(BaseModel):
+    startedAt: Optional[str] = None
+
+
+class ReviewRequest(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str = Field(min_length=2, max_length=500)
+
+
 class AIResultRequest(BaseModel):
     exercise: str = Field(min_length=2, max_length=100)
     reps: int = Field(ge=0, le=10000)

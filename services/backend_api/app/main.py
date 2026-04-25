@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import get_current_user, issue_access_token, require_role
 from .database import (
+    add_doctor_to_wishlist,
     create_doctor_account,
     create_booking,
     create_patient_account,
@@ -18,10 +19,18 @@ from .database import (
     hash_password,
     initialize_database,
     list_doctors,
+    list_notifications_for_user,
+    list_reviews_for_doctor,
+    list_reviews_for_patient,
     list_sessions_for_doctor,
     list_sessions_for_patient,
     list_slots_for_doctor,
     list_ai_results_for_patient_exercise,
+    list_wishlist_for_patient,
+    mark_notification_read,
+    remove_doctor_from_wishlist,
+    start_session,
+    submit_session_review,
     update_session_status,
     upsert_ai_result,
 )
@@ -32,6 +41,8 @@ from .schemas import (
     LoginRequest,
     RegisterDoctorRequest,
     RegisterPatientRequest,
+    ReviewRequest,
+    SessionStartRequest,
     SessionStatusRequest,
     SlotsResponse,
 )
@@ -122,6 +133,7 @@ def serialize_session(session: Dict[str, Any]) -> Dict[str, Any]:
         "doctorNotes": session["doctor_notes"],
         "review": session["review"],
         "reviewRating": session["review_rating"],
+        "startedAt": session.get("started_at"),
         "paymentStatus": session["payment_status"],
         "createdAt": session["created_at"],
         "updatedAt": session["updated_at"],
@@ -149,6 +161,42 @@ def serialize_ai_result(result: Dict[str, Any]) -> Dict[str, Any]:
             "recommendations": result["recommendations"],
             "metrics": result.get("report_metrics") or {},
         },
+    }
+
+
+def serialize_notification(notification: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": notification["id"],
+        "type": notification["type"],
+        "title": notification["title"],
+        "body": notification["body"],
+        "isRead": bool(notification["is_read"]),
+        "relatedSessionId": notification["related_session_id"],
+        "relatedDoctorId": notification["related_doctor_id"],
+        "relatedPatientId": notification["related_patient_id"],
+        "createdAt": notification["created_at"],
+    }
+
+
+def serialize_wishlist_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "wishlistId": item["wishlist_id"],
+        "createdAt": item["wishlist_created_at"],
+        "doctor": serialize_doctor(item),
+    }
+
+
+def serialize_review(review: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": review["id"],
+        "sessionId": review["session_id"],
+        "patientId": review["patient_id"],
+        "doctorId": review["doctor_id"],
+        "patientName": review["patient_name"],
+        "doctorName": review["doctor_name"],
+        "rating": review["rating"],
+        "comment": review["comment"],
+        "createdAt": review["created_at"],
     }
 
 
@@ -303,6 +351,17 @@ def get_doctor_slots(doctor_id: str):
     return {"items": [serialize_slot(slot) for slot in list_slots_for_doctor(doctor_id)]}
 
 
+@app.get("/api/doctors/{doctor_id}/reviews")
+def get_doctor_reviews(doctor_id: str):
+    doctor = get_doctor_profile(doctor_id)
+    if not doctor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_response("Doctor not found", "DOCTOR_NOT_FOUND"),
+        )
+    return {"items": [serialize_review(item) for item in list_reviews_for_doctor(doctor_id)]}
+
+
 @app.post("/api/bookings")
 def create_booking_endpoint(
     payload: BookingRequest,
@@ -324,6 +383,60 @@ def create_booking_endpoint(
         ) from exc
 
     return {"message": "Booking created successfully", "session": serialize_session(session)}
+
+
+@app.get("/api/notifications")
+def get_notifications(current_user=Depends(get_current_user)):
+    notifications = [serialize_notification(item) for item in list_notifications_for_user(current_user["id"])]
+    unread_count = sum(1 for item in notifications if not item["isRead"])
+    return {"items": notifications, "unreadCount": unread_count}
+
+
+@app.patch("/api/notifications/{notification_id}/read")
+def patch_notification_read(notification_id: str, current_user=Depends(get_current_user)):
+    notification = mark_notification_read(notification_id, current_user["id"])
+    if not notification:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_response("Notification not found", "NOTIFICATION_NOT_FOUND"),
+        )
+    return {
+        "message": "Notification marked as read",
+        "notification": serialize_notification(notification),
+    }
+
+
+@app.get("/api/wishlist")
+def get_wishlist(patient=Depends(require_role("patient"))):
+    items = [serialize_wishlist_item(item) for item in list_wishlist_for_patient(patient["id"])]
+    return {"items": items}
+
+
+@app.post("/api/wishlist/{doctor_id}")
+def add_wishlist_item(doctor_id: str, patient=Depends(require_role("patient"))):
+    try:
+        item = add_doctor_to_wishlist(patient["id"], doctor_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(str(exc), "WISHLIST_ADD_FAILED"),
+        ) from exc
+
+    return {
+        "message": "Doctor added to wishlist",
+        "item": serialize_wishlist_item(item),
+    }
+
+
+@app.delete("/api/wishlist/{doctor_id}")
+def remove_wishlist_item(doctor_id: str, patient=Depends(require_role("patient"))):
+    removed = remove_doctor_from_wishlist(patient["id"], doctor_id)
+    if not removed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_response("Wishlist item not found", "WISHLIST_NOT_FOUND"),
+        )
+    return {"message": "Doctor removed from wishlist"}
 
 
 @app.get("/api/sessions/patient")
@@ -354,6 +467,40 @@ def get_session_details(session_id: str, current_user=Depends(get_current_user))
         )
 
     return serialize_session(session)
+
+
+@app.post("/api/sessions/{session_id}/start")
+def start_session_endpoint(
+    session_id: str,
+    payload: SessionStartRequest,
+    current_user=Depends(get_current_user),
+):
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_response("Session not found", "SESSION_NOT_FOUND"),
+        )
+    if current_user["id"] not in {session["patient_id"], session["doctor_id"]}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response("You cannot start this session", "FORBIDDEN"),
+        )
+
+    try:
+        started = start_session(session_id, payload.startedAt)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(str(exc), "SESSION_START_FAILED"),
+        ) from exc
+
+    return {
+        "message": "Session started",
+        "sessionId": session_id,
+        "status": "in_progress",
+        "startedAt": started.get("started_at"),
+    }
 
 
 @app.patch("/api/sessions/{session_id}/status")
@@ -390,6 +537,31 @@ def patch_session_status(
         ) from exc
 
     return {"message": "Session updated successfully", "session": serialize_session(updated)}
+
+
+@app.post("/api/sessions/{session_id}/review")
+def post_session_review(
+    session_id: str,
+    payload: ReviewRequest,
+    patient=Depends(require_role("patient")),
+):
+    try:
+        review = submit_session_review(
+            session_id=session_id,
+            patient_id=patient["id"],
+            rating=payload.rating,
+            comment=payload.comment,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(str(exc), "REVIEW_SUBMIT_FAILED"),
+        ) from exc
+
+    return {
+        "message": "Review submitted successfully",
+        "review": serialize_review(review),
+    }
 
 
 @app.post("/api/sessions/{session_id}/ai-result")
@@ -471,3 +643,8 @@ def get_patient_ai_summary(
         "latest": latest,
         "items": items,
     }
+
+
+@app.get("/api/reviews/patient")
+def get_patient_reviews(patient=Depends(require_role("patient"))):
+    return {"items": [serialize_review(item) for item in list_reviews_for_patient(patient["id"])]}
