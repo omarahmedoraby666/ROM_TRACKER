@@ -758,6 +758,150 @@ def get_doctor_profile(user_id: str) -> Optional[Dict[str, Any]]:
         return row_to_dict(row)
 
 
+def update_user_profile(
+    *,
+    user_id: str,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+    phone_code: Optional[str] = None,
+    phone_number: Optional[str] = None,
+    country: Optional[str] = None,
+    gender: Optional[str] = None,
+    avatar_url: Optional[str] = None,
+    specialization: Optional[str] = None,
+    clinic_address: Optional[str] = None,
+    experience_years: Optional[int] = None,
+    session_price: Optional[int] = None,
+    bio: Optional[str] = None,
+) -> Dict[str, Any]:
+    user = get_user_by_id(user_id)
+    if not user:
+        raise ValueError("User not found")
+
+    next_first_name = (first_name or user["first_name"]).strip()
+    next_last_name = (last_name or user["last_name"]).strip()
+    next_full_name = f"{next_first_name} {next_last_name}"
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE users
+            SET first_name = ?, last_name = ?, full_name = ?, phone_code = ?,
+                phone_number = ?, country = ?, gender = ?, avatar_url = ?
+            WHERE id = ?
+            """,
+            (
+                next_first_name,
+                next_last_name,
+                next_full_name,
+                phone_code if phone_code is not None else user["phone_code"],
+                phone_number if phone_number is not None else user["phone_number"],
+                country if country is not None else user["country"],
+                gender if gender is not None else user["gender"],
+                avatar_url if avatar_url is not None else user["avatar_url"],
+                user_id,
+            ),
+        )
+
+        if user["role"] == "doctor":
+            doctor = get_doctor_profile(user_id)
+            if not doctor:
+                raise ValueError("Doctor profile not found")
+            connection.execute(
+                """
+                UPDATE doctor_profiles
+                SET specialization = ?, clinic_address = ?, experience_years = ?,
+                    session_price = ?, bio = ?
+                WHERE user_id = ?
+                """,
+                (
+                    specialization if specialization is not None else doctor["specialization"],
+                    clinic_address if clinic_address is not None else doctor["clinic_address"],
+                    experience_years if experience_years is not None else doctor["experience_years"],
+                    session_price if session_price is not None else doctor["session_price"],
+                    bio if bio is not None else doctor["bio"],
+                    user_id,
+                ),
+            )
+
+        connection.commit()
+
+    updated_doctor = get_doctor_profile(user_id)
+    if updated_doctor:
+        return updated_doctor
+    updated_user = get_user_by_id(user_id)
+    if not updated_user:
+        raise ValueError("Updated user could not be loaded")
+    return updated_user
+
+
+def list_doctor_applications(status_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+    query = """
+        SELECT u.*, dp.specialization, dp.clinic_address, dp.experience_years,
+               dp.session_price, dp.bio, dp.rating, dp.approval_status
+        FROM users u
+        JOIN doctor_profiles dp ON dp.user_id = u.id
+        WHERE u.role = 'doctor'
+    """
+    params: List[Any] = []
+    if status_filter:
+        query += " AND dp.approval_status = ?"
+        params.append(status_filter)
+    query += " ORDER BY u.created_at DESC, u.full_name ASC"
+
+    with get_connection() as connection:
+        rows = connection.execute(query, params).fetchall()
+        return rows_to_dicts(rows)
+
+
+def update_doctor_approval_status(user_id: str, approval_status: str) -> Dict[str, Any]:
+    doctor = get_doctor_profile(user_id)
+    if not doctor:
+        raise ValueError("Doctor profile not found")
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE doctor_profiles
+            SET approval_status = ?
+            WHERE user_id = ?
+            """,
+            (approval_status, user_id),
+        )
+        connection.commit()
+
+    updated = get_doctor_profile(user_id)
+    if not updated:
+        raise ValueError("Doctor profile could not be loaded after status update")
+
+    if approval_status == "approved":
+        create_notification(
+            user_id=user_id,
+            type_="application_approved",
+            title="Doctor application approved",
+            body="Your doctor application has been approved. You can now use the doctor flow.",
+            related_doctor_id=user_id,
+        )
+    elif approval_status == "rejected":
+        create_notification(
+            user_id=user_id,
+            type_="application_rejected",
+            title="Doctor application rejected",
+            body="Your doctor application was reviewed and marked as rejected.",
+            related_doctor_id=user_id,
+        )
+    else:
+        create_notification(
+            user_id=user_id,
+            type_="application_pending",
+            title="Doctor application pending",
+            body="Your doctor application is pending review.",
+            related_doctor_id=user_id,
+        )
+
+    return updated
+
+
 def list_wishlist_for_patient(patient_id: str) -> List[Dict[str, Any]]:
     with get_connection() as connection:
         rows = connection.execute(

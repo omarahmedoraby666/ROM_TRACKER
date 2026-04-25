@@ -67,6 +67,25 @@ class ContactSubmissionRequest(BaseModel):
     message: str = Field(min_length=5, max_length=2000)
 
 
+class UpdateProfileRequest(BaseModel):
+    firstName: Optional[str] = Field(default=None, min_length=2, max_length=50)
+    lastName: Optional[str] = Field(default=None, min_length=2, max_length=50)
+    phoneCode: Optional[str] = Field(default=None, max_length=8)
+    phoneNumber: Optional[str] = Field(default=None, max_length=30)
+    country: Optional[str] = Field(default=None, max_length=80)
+    gender: Optional[str] = Field(default=None, max_length=30)
+    avatarUrl: Optional[str] = Field(default=None, max_length=500)
+    specialization: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    clinicAddress: Optional[str] = Field(default=None, min_length=3, max_length=150)
+    experienceYears: Optional[int] = Field(default=None, ge=0, le=60)
+    sessionPrice: Optional[int] = Field(default=None, ge=0, le=100000)
+    bio: Optional[str] = Field(default=None, min_length=10, max_length=400)
+
+
+class DoctorApplicationDecisionRequest(BaseModel):
+    approvalStatus: str = Field(pattern="^(approved|pending|rejected)$")
+
+
 class AIResultRequest(BaseModel):
     exercise: str = Field(min_length=2, max_length=100)
     reps: int = Field(ge=0, le=10000)

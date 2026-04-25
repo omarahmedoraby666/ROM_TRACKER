@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from .auth import get_current_user, issue_access_token, require_role
+from .auth import get_current_user, issue_access_token, require_admin_key, require_role
 from .database import (
     add_doctor_to_wishlist,
     create_contact_submission,
@@ -15,11 +15,13 @@ from .database import (
     create_patient_account,
     get_doctor_dashboard_summary,
     get_ai_result,
+    get_user_by_id,
     get_doctor_profile,
     get_session,
     get_user_by_email,
     hash_password,
     initialize_database,
+    list_doctor_applications,
     list_doctors,
     list_notifications_for_user,
     list_reviews_for_doctor,
@@ -34,13 +36,16 @@ from .database import (
     remove_doctor_from_wishlist,
     start_session,
     submit_session_review,
+    update_doctor_approval_status,
     update_session_status,
+    update_user_profile,
     upsert_ai_result,
 )
 from .schemas import (
     AIResultRequest,
     BookingRequest,
     ContactSubmissionRequest,
+    DoctorApplicationDecisionRequest,
     DoctorsListResponse,
     LoginRequest,
     RegisterDoctorRequest,
@@ -49,6 +54,7 @@ from .schemas import (
     SessionStartRequest,
     SessionStatusRequest,
     SlotsResponse,
+    UpdateProfileRequest,
 )
 
 
@@ -327,6 +333,54 @@ def get_me(current_user=Depends(get_current_user)):
     return serialize_user(current_user)
 
 
+@app.patch("/api/users/me")
+def patch_me(
+    payload: UpdateProfileRequest,
+    current_user=Depends(get_current_user),
+):
+    changes = payload.model_dump(exclude_none=True)
+    if not changes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response("No profile fields were provided", "PROFILE_UPDATE_EMPTY"),
+        )
+
+    if current_user["role"] != "doctor":
+        doctor_only_fields = {"specialization", "clinicAddress", "experienceYears", "sessionPrice", "bio"}
+        if doctor_only_fields.intersection(changes):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=error_response("Doctor profile fields are not allowed for patients", "FORBIDDEN"),
+            )
+
+    try:
+        updated = update_user_profile(
+            user_id=current_user["id"],
+            first_name=payload.firstName,
+            last_name=payload.lastName,
+            phone_code=payload.phoneCode,
+            phone_number=payload.phoneNumber,
+            country=payload.country,
+            gender=payload.gender,
+            avatar_url=payload.avatarUrl,
+            specialization=payload.specialization,
+            clinic_address=payload.clinicAddress,
+            experience_years=payload.experienceYears,
+            session_price=payload.sessionPrice,
+            bio=payload.bio,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(str(exc), "PROFILE_UPDATE_FAILED"),
+        ) from exc
+
+    return {
+        "message": "Profile updated successfully",
+        "user": serialize_user(updated),
+    }
+
+
 @app.get("/api/doctor-application/status")
 def get_doctor_application_status(doctor=Depends(require_role("doctor"))):
     profile = get_doctor_profile(doctor["id"])
@@ -338,6 +392,47 @@ def get_doctor_application_status(doctor=Depends(require_role("doctor"))):
     return {
         "doctorId": doctor["id"],
         "approvalStatus": profile["approval_status"],
+    }
+
+
+@app.get("/api/admin/doctor-applications")
+def get_admin_doctor_applications(
+    approvalStatus: Optional[str] = Query(default=None),
+    _=Depends(require_admin_key),
+):
+    if approvalStatus and approvalStatus not in {"approved", "pending", "rejected"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response("Unsupported approval status filter", "INVALID_APPROVAL_STATUS"),
+        )
+    items = [serialize_user(item) for item in list_doctor_applications(approvalStatus)]
+    return {"items": items, "count": len(items)}
+
+
+@app.patch("/api/admin/doctor-applications/{doctor_id}")
+def patch_admin_doctor_application(
+    doctor_id: str,
+    payload: DoctorApplicationDecisionRequest,
+    _=Depends(require_admin_key),
+):
+    doctor = get_user_by_id(doctor_id)
+    if not doctor or doctor["role"] != "doctor":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_response("Doctor not found", "DOCTOR_NOT_FOUND"),
+        )
+
+    try:
+        updated = update_doctor_approval_status(doctor_id, payload.approvalStatus)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(str(exc), "DOCTOR_APPLICATION_UPDATE_FAILED"),
+        ) from exc
+
+    return {
+        "message": "Doctor application status updated successfully",
+        "doctor": serialize_user(updated),
     }
 
 

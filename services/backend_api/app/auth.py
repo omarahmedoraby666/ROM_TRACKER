@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import secrets
 from typing import Dict, Optional
 
@@ -9,6 +10,7 @@ from .database import get_user_by_id
 
 
 TOKEN_REGISTRY: Dict[str, str] = {}
+ADMIN_API_KEY = os.environ.get("ROM_TRACKER_ADMIN_KEY", "rom_tracker_admin_2026")
 
 
 def issue_access_token(user_id: str) -> str:
@@ -62,3 +64,12 @@ def require_role(expected_role: str):
         return user
 
     return dependency
+
+
+def require_admin_key(x_admin_key: Optional[str] = Header(default=None)):
+    if not x_admin_key or x_admin_key != ADMIN_API_KEY:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing admin key",
+        )
+    return True

@@ -42,6 +42,16 @@ For a real Android device on the same Wi-Fi as the laptop:
 
 `http://<LAPTOP_IP>:3000/api`
 
+## Admin Key
+
+The lightweight admin endpoints use:
+
+`X-Admin-Key: rom_tracker_admin_2026`
+
+You can override it with the environment variable:
+
+`ROM_TRACKER_ADMIN_KEY`
+
 ## Demo Login Accounts
 
 - Patient:
@@ -93,7 +103,10 @@ The backend will:
 - `POST /api/auth/register/patient`
 - `POST /api/auth/register/doctor`
 - `GET /api/users/me`
+- `PATCH /api/users/me`
 - `GET /api/doctor-application/status`
+- `GET /api/admin/doctor-applications`
+- `PATCH /api/admin/doctor-applications/{doctorId}`
 - `GET /api/doctors`
 - `GET /api/doctors/{doctorId}`
 - `GET /api/doctors/{doctorId}/reviews`
@@ -130,6 +143,8 @@ The backend will:
 - Wishlist is stored per patient and linked to real doctor records.
 - Contact Us submissions are stored in the backend database.
 - Doctor dashboard summary is derived from real sessions and wallet transactions.
+- Profile editing is supported from the backend for both patients and doctors.
+- Doctor application approval and rejection can be controlled through admin endpoints.
 - AI reports are based on the patient's actual recorded history for the same exercise, not only the latest single result.
 
 ## Notes
