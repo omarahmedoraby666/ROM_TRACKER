@@ -98,12 +98,16 @@ The backend will:
 - `GET /api/doctors/{doctorId}`
 - `GET /api/doctors/{doctorId}/reviews`
 - `GET /api/doctors/{doctorId}/slots`
+- `GET /api/search`
+- `GET /api/doctor/dashboard-summary`
 - `POST /api/bookings`
 - `GET /api/notifications`
 - `PATCH /api/notifications/{notificationId}/read`
+- `POST /api/support/contact`
 - `GET /api/wishlist`
 - `POST /api/wishlist/{doctorId}`
 - `DELETE /api/wishlist/{doctorId}`
+- `GET /api/wallet/doctor`
 - `GET /api/sessions/patient`
 - `GET /api/sessions/doctor`
 - `GET /api/sessions/{sessionId}`
@@ -118,10 +122,14 @@ The backend will:
 ## Product Logic Already Implemented
 
 - Booking creates notifications for both patient and doctor.
+- Booking creates a pending wallet transaction for the doctor.
 - Session start creates a doctor notification.
 - Completing or canceling a session creates notifications for both sides.
+- Completing a session releases the doctor payment as `available`; canceling marks it as `canceled`.
 - Reviews are limited to completed sessions and create a doctor notification.
 - Wishlist is stored per patient and linked to real doctor records.
+- Contact Us submissions are stored in the backend database.
+- Doctor dashboard summary is derived from real sessions and wallet transactions.
 - AI reports are based on the patient's actual recorded history for the same exercise, not only the latest single result.
 
 ## Notes

@@ -154,6 +154,34 @@ def initialize_database() -> None:
                 FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (doctor_id) REFERENCES users(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS wallet_transactions (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL UNIQUE,
+                doctor_id TEXT NOT NULL,
+                patient_id TEXT NOT NULL,
+                amount INTEGER NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('pending', 'available', 'canceled')),
+                description TEXT NOT NULL,
+                released_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                FOREIGN KEY (doctor_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS contact_submissions (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL,
+                subject TEXT,
+                message TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'new',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+            );
             """
         )
         ensure_migrations(connection)
@@ -456,6 +484,140 @@ def mark_notification_read(notification_id: str, user_id: str) -> Optional[Dict[
         )
         connection.commit()
     return get_notification(notification_id, user_id)
+
+
+def get_wallet_transaction_by_session(session_id: str) -> Optional[Dict[str, Any]]:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT wt.*, d.full_name AS doctor_name, p.full_name AS patient_name
+            FROM wallet_transactions wt
+            JOIN users d ON d.id = wt.doctor_id
+            JOIN users p ON p.id = wt.patient_id
+            WHERE wt.session_id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+        return row_to_dict(row)
+
+
+def ensure_wallet_transaction_for_session(session: Dict[str, Any]) -> Dict[str, Any]:
+    existing = get_wallet_transaction_by_session(session["id"])
+    if existing:
+        return existing
+
+    doctor = get_doctor_profile(session["doctor_id"])
+    if not doctor:
+        raise ValueError("Doctor profile not found for wallet transaction")
+
+    transaction_id = make_id("wallet")
+    timestamp = now_iso()
+    description = f"Session payment from {session['patient_name']} for {session['display_time']}"
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO wallet_transactions (
+                id, session_id, doctor_id, patient_id, amount, status, description,
+                released_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?)
+            """,
+            (
+                transaction_id,
+                session["id"],
+                session["doctor_id"],
+                session["patient_id"],
+                doctor["session_price"],
+                description,
+                timestamp,
+                timestamp,
+            ),
+        )
+        connection.commit()
+
+    transaction = get_wallet_transaction_by_session(session["id"])
+    if not transaction:
+        raise ValueError("Wallet transaction could not be loaded")
+    return transaction
+
+
+def sync_wallet_transaction_status(session: Dict[str, Any], wallet_status: str) -> Dict[str, Any]:
+    transaction = ensure_wallet_transaction_for_session(session)
+    released_at = now_iso() if wallet_status == "available" else None
+    updated_at = now_iso()
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE wallet_transactions
+            SET status = ?, released_at = ?, updated_at = ?
+            WHERE session_id = ?
+            """,
+            (wallet_status, released_at, updated_at, session["id"]),
+        )
+        connection.commit()
+
+    updated = get_wallet_transaction_by_session(session["id"])
+    if not updated:
+        raise ValueError("Wallet transaction could not be updated")
+    return updated
+
+
+def list_wallet_transactions_for_doctor(doctor_id: str) -> List[Dict[str, Any]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT wt.*, d.full_name AS doctor_name, p.full_name AS patient_name
+            FROM wallet_transactions wt
+            JOIN users d ON d.id = wt.doctor_id
+            JOIN users p ON p.id = wt.patient_id
+            WHERE wt.doctor_id = ?
+            ORDER BY wt.created_at DESC
+            """,
+            (doctor_id,),
+        ).fetchall()
+        return rows_to_dicts(rows)
+
+
+def get_wallet_summary_for_doctor(doctor_id: str) -> Dict[str, Any]:
+    transactions = list_wallet_transactions_for_doctor(doctor_id)
+    pending_balance = sum(item["amount"] for item in transactions if item["status"] == "pending")
+    available_balance = sum(item["amount"] for item in transactions if item["status"] == "available")
+    canceled_amount = sum(item["amount"] for item in transactions if item["status"] == "canceled")
+    return {
+        "pendingBalance": pending_balance,
+        "availableBalance": available_balance,
+        "canceledAmount": canceled_amount,
+        "transactionCount": len(transactions),
+    }
+
+
+def create_contact_submission(
+    *,
+    user_id: Optional[str],
+    name: str,
+    email: str,
+    subject: Optional[str],
+    message: str,
+) -> Dict[str, Any]:
+    submission_id = make_id("support")
+    created_at = now_iso()
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO contact_submissions (
+                id, user_id, name, email, subject, message, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'new', ?)
+            """,
+            (submission_id, user_id, name, email.lower(), subject, message, created_at),
+        )
+        connection.commit()
+        row = connection.execute(
+            "SELECT * FROM contact_submissions WHERE id = ?",
+            (submission_id,),
+        ).fetchone()
+        return row_to_dict(row) or {}
 
 
 def create_patient_account(
@@ -763,6 +925,8 @@ def create_booking(
     if not session:
         raise ValueError("Booking was created but could not be loaded")
 
+    ensure_wallet_transaction_for_session(session)
+
     create_notification(
         user_id=patient_id,
         type_="booking_confirmed",
@@ -820,6 +984,22 @@ def list_sessions_for_doctor(doctor_id: str) -> List[Dict[str, Any]]:
         return rows_to_dicts(rows)
 
 
+def get_doctor_dashboard_summary(doctor_id: str) -> Dict[str, Any]:
+    sessions = list_sessions_for_doctor(doctor_id)
+    upcoming_count = sum(1 for item in sessions if item["status"] == "upcoming")
+    completed_count = sum(1 for item in sessions if item["status"] == "completed")
+    canceled_count = sum(1 for item in sessions if item["status"] == "canceled")
+    wallet = get_wallet_summary_for_doctor(doctor_id)
+    return {
+        "doctorId": doctor_id,
+        "upcomingSessions": upcoming_count,
+        "completedSessions": completed_count,
+        "canceledSessions": canceled_count,
+        "totalSessions": len(sessions),
+        **wallet,
+    }
+
+
 def update_session_status(
     *,
     session_id: str,
@@ -875,6 +1055,13 @@ def update_session_status(
     session = get_session(session_id)
     if not session:
         raise ValueError("Session was updated but could not be reloaded")
+
+    if status == "completed":
+        sync_wallet_transaction_status(session, "available")
+    elif status == "canceled":
+        sync_wallet_transaction_status(session, "canceled")
+    elif status == "upcoming":
+        sync_wallet_transaction_status(session, "pending")
 
     if status == "completed":
         create_notification(

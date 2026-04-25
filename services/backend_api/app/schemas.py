@@ -62,6 +62,11 @@ class ReviewRequest(BaseModel):
     comment: str = Field(min_length=2, max_length=500)
 
 
+class ContactSubmissionRequest(BaseModel):
+    subject: Optional[str] = Field(default=None, max_length=150)
+    message: str = Field(min_length=5, max_length=2000)
+
+
 class AIResultRequest(BaseModel):
     exercise: str = Field(min_length=2, max_length=100)
     reps: int = Field(ge=0, le=10000)

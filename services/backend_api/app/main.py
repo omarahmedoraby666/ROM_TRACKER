@@ -9,9 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import get_current_user, issue_access_token, require_role
 from .database import (
     add_doctor_to_wishlist,
+    create_contact_submission,
     create_doctor_account,
     create_booking,
     create_patient_account,
+    get_doctor_dashboard_summary,
     get_ai_result,
     get_doctor_profile,
     get_session,
@@ -26,6 +28,7 @@ from .database import (
     list_sessions_for_patient,
     list_slots_for_doctor,
     list_ai_results_for_patient_exercise,
+    list_wallet_transactions_for_doctor,
     list_wishlist_for_patient,
     mark_notification_read,
     remove_doctor_from_wishlist,
@@ -37,6 +40,7 @@ from .database import (
 from .schemas import (
     AIResultRequest,
     BookingRequest,
+    ContactSubmissionRequest,
     DoctorsListResponse,
     LoginRequest,
     RegisterDoctorRequest,
@@ -197,6 +201,23 @@ def serialize_review(review: Dict[str, Any]) -> Dict[str, Any]:
         "rating": review["rating"],
         "comment": review["comment"],
         "createdAt": review["created_at"],
+    }
+
+
+def serialize_wallet_transaction(transaction: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": transaction["id"],
+        "sessionId": transaction["session_id"],
+        "doctorId": transaction["doctor_id"],
+        "doctorName": transaction["doctor_name"],
+        "patientId": transaction["patient_id"],
+        "patientName": transaction["patient_name"],
+        "amount": transaction["amount"],
+        "status": transaction["status"],
+        "description": transaction["description"],
+        "releasedAt": transaction["released_at"],
+        "createdAt": transaction["created_at"],
+        "updatedAt": transaction["updated_at"],
     }
 
 
@@ -362,6 +383,25 @@ def get_doctor_reviews(doctor_id: str):
     return {"items": [serialize_review(item) for item in list_reviews_for_doctor(doctor_id)]}
 
 
+@app.get("/api/search")
+def search_catalog(
+    query: Optional[str] = Query(default=None, min_length=1),
+    specialization: Optional[str] = Query(default=None),
+):
+    doctors = [serialize_doctor(item) for item in list_doctors(search=query, specialization=specialization)]
+    return {
+        "query": query,
+        "specialization": specialization,
+        "doctors": doctors,
+        "count": len(doctors),
+    }
+
+
+@app.get("/api/doctor/dashboard-summary")
+def get_doctor_dashboard(doctor=Depends(require_role("doctor"))):
+    return get_doctor_dashboard_summary(doctor["id"])
+
+
 @app.post("/api/bookings")
 def create_booking_endpoint(
     payload: BookingRequest,
@@ -406,6 +446,26 @@ def patch_notification_read(notification_id: str, current_user=Depends(get_curre
     }
 
 
+@app.post("/api/support/contact")
+def submit_contact_message(
+    payload: ContactSubmissionRequest,
+    current_user=Depends(get_current_user),
+):
+    submission = create_contact_submission(
+        user_id=current_user["id"],
+        name=current_user["full_name"],
+        email=current_user["email"],
+        subject=payload.subject,
+        message=payload.message,
+    )
+    return {
+        "message": "Support request submitted successfully",
+        "submissionId": submission["id"],
+        "status": submission["status"],
+        "createdAt": submission["created_at"],
+    }
+
+
 @app.get("/api/wishlist")
 def get_wishlist(patient=Depends(require_role("patient"))):
     items = [serialize_wishlist_item(item) for item in list_wishlist_for_patient(patient["id"])]
@@ -437,6 +497,24 @@ def remove_wishlist_item(doctor_id: str, patient=Depends(require_role("patient")
             detail=error_response("Wishlist item not found", "WISHLIST_NOT_FOUND"),
         )
     return {"message": "Doctor removed from wishlist"}
+
+
+@app.get("/api/wallet/doctor")
+def get_doctor_wallet(doctor=Depends(require_role("doctor"))):
+    transactions = [
+        serialize_wallet_transaction(item)
+        for item in list_wallet_transactions_for_doctor(doctor["id"])
+    ]
+    summary = get_doctor_dashboard_summary(doctor["id"])
+    return {
+        "summary": {
+            "pendingBalance": summary["pendingBalance"],
+            "availableBalance": summary["availableBalance"],
+            "canceledAmount": summary["canceledAmount"],
+            "transactionCount": summary["transactionCount"],
+        },
+        "items": transactions,
+    }
 
 
 @app.get("/api/sessions/patient")
