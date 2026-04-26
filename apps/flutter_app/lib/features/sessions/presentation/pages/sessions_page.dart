@@ -6,13 +6,15 @@ import 'package:rom_tracker_app/core/network/backend_client.dart';
 import 'package:rom_tracker_app/core/widgets/app_search_bar.dart';
 import 'package:rom_tracker_app/core/widgets/app_user_header.dart';
 import 'package:rom_tracker_app/core/widgets/user_avatar.dart';
+import 'package:rom_tracker_app/features/doctors/data/backend_doctors_api.dart';
+import 'package:rom_tracker_app/features/doctors/presentation/models/doctor_catalog.dart';
+import 'package:rom_tracker_app/features/doctors/presentation/models/doctor_profile.dart';
+import 'package:rom_tracker_app/features/doctors/presentation/pages/doctor_details_page.dart';
 import 'package:rom_tracker_app/features/home/presentation/pages/main_layout.dart';
 import 'package:rom_tracker_app/features/notifications/presentation/pages/notifications_page.dart';
-import 'package:rom_tracker_app/features/payment_wallet/presentation/pages/payment_methods_page.dart';
 import 'package:rom_tracker_app/features/sessions/data/backend_sessions_api.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/booking_store.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/local_demo_sync_store.dart';
-import 'package:rom_tracker_app/features/sessions/presentation/models/patient_booking.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/session_entry.dart';
 import 'package:rom_tracker_app/features/user_profile/presentation/models/user_profile_data.dart';
 import 'package:rom_tracker_app/features/user_profile/presentation/models/user_profile_store.dart';
@@ -229,10 +231,7 @@ class _SessionsPageState extends State<SessionsPage> {
                     .map(
                       (session) => _CanceledCard(
                         session: session,
-                        onReview: () => _showReviewDialog(
-                          session: session,
-                          stage: SessionStage.canceled,
-                        ),
+                        onRebook: () => _startRebook(session),
                       ),
                     )
                     .toList(),
@@ -244,22 +243,41 @@ class _SessionsPageState extends State<SessionsPage> {
   }
 
   Future<void> _startRebook(SessionEntry session) async {
+    DoctorProfile? doctor = DoctorCatalog.findById(session.doctorId) ??
+        DoctorCatalog.findByName(session.doctorName);
+
+    if (session.doctorId != null &&
+        session.doctorId!.isNotEmpty &&
+        BackendClient.instance.isConfigured) {
+      try {
+        doctor = await BackendDoctorsApi.instance.fetchDoctorProfileById(
+          session.doctorId!,
+        );
+      } catch (_) {
+        doctor ??= DoctorCatalog.findByName(session.doctorName);
+      }
+    }
+
+    if (!mounted) return;
+    if (doctor == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not load doctor details for re-booking'),
+        ),
+      );
+      return;
+    }
+
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => PaymentMethodsPage(
-          booking: PatientBooking(
-            doctorName: session.doctorName,
-            specialty: session.specialty,
-            imagePath: session.imagePath,
-            dayLabel: 'Next',
-            dayNumber: 'available',
-            timeLabel: '5:00 pm',
-            reason: 'Re-booked session',
-          ),
-        ),
+        builder: (_) => DoctorDetailsPage(doctor: doctor!),
       ),
     );
+
+    if (BackendClient.instance.isConfigured) {
+      await BookingStore.refreshFromBackend();
+    }
   }
 
   Future<void> _showReviewDialog({
@@ -710,11 +728,11 @@ class _CompletedCard extends StatelessWidget {
 class _CanceledCard extends StatelessWidget {
   const _CanceledCard({
     required this.session,
-    required this.onReview,
+    required this.onRebook,
   });
 
   final SessionEntry session;
-  final VoidCallback onReview;
+  final VoidCallback onRebook;
 
   @override
   Widget build(BuildContext context) {
@@ -814,7 +832,7 @@ class _CanceledCard extends StatelessWidget {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: onReview,
+              onPressed: onRebook,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 shape: RoundedRectangleBorder(
@@ -822,7 +840,7 @@ class _CanceledCard extends StatelessWidget {
                 ),
               ),
               child: Text(
-                session.review == null ? 'Add Review' : 'Edit Review',
+                'Re-Book',
                 style: GoogleFonts.inter(
                   color: Colors.white,
                   fontWeight: FontWeight.w700,

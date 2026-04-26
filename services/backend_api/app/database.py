@@ -185,8 +185,10 @@ def initialize_database() -> None:
             """
         )
         ensure_migrations(connection)
+        cleanup_demo_test_doctors(connection)
         seed_database(connection)
         reconcile_slot_booking_flags(connection)
+        ensure_minimum_available_slots(connection)
 
 
 def ensure_migrations(connection: sqlite3.Connection) -> None:
@@ -211,6 +213,18 @@ def ensure_migrations(connection: sqlite3.Connection) -> None:
         connection.commit()
 
 
+def cleanup_demo_test_doctors(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        DELETE FROM users
+        WHERE role = 'doctor'
+          AND full_name = 'Pending Doctor'
+          AND email LIKE 'pending.doctor+%@app.com'
+        """
+    )
+    connection.commit()
+
+
 def reconcile_slot_booking_flags(connection: sqlite3.Connection) -> None:
     connection.execute("UPDATE slots SET is_booked = 0")
     connection.execute(
@@ -225,6 +239,79 @@ def reconcile_slot_booking_flags(connection: sqlite3.Connection) -> None:
         """
     )
     connection.commit()
+
+
+def ensure_minimum_available_slots(
+    connection: sqlite3.Connection,
+    *,
+    minimum_available_slots: int = 4,
+) -> None:
+    doctors = connection.execute(
+        """
+        SELECT u.id
+        FROM users u
+        JOIN doctor_profiles dp ON dp.user_id = u.id
+        WHERE u.role = 'doctor' AND dp.approval_status = 'approved'
+        """
+    ).fetchall()
+
+    now = datetime.now(timezone.utc)
+    fallback_start = now.replace(hour=18, minute=30, second=0, microsecond=0)
+    if fallback_start <= now:
+        fallback_start += timedelta(days=1)
+
+    for doctor in doctors:
+        doctor_id = doctor["id"]
+        rows = connection.execute(
+            """
+            SELECT sl.id, sl.scheduled_at,
+                   CASE
+                       WHEN EXISTS (
+                           SELECT 1
+                           FROM sessions s
+                           WHERE s.slot_id = sl.id
+                             AND s.status IN ('upcoming', 'completed')
+                       ) THEN 1
+                       ELSE 0
+                   END AS active_booked
+            FROM slots sl
+            WHERE sl.doctor_id = ?
+            ORDER BY sl.scheduled_at ASC
+            """,
+            (doctor_id,),
+        ).fetchall()
+
+        latest_scheduled_at = fallback_start
+        available_count = 0
+        for row in rows:
+            scheduled_at = datetime.fromisoformat(
+                row["scheduled_at"].replace("Z", "+00:00"),
+            )
+            if scheduled_at > latest_scheduled_at:
+                latest_scheduled_at = scheduled_at
+            if scheduled_at >= now and not row["active_booked"]:
+                available_count += 1
+
+        missing_slots = max(0, minimum_available_slots - available_count)
+        if missing_slots == 0:
+            continue
+
+        for index in range(missing_slots):
+            next_slot_time = latest_scheduled_at + timedelta(days=index + 1)
+            display_time = next_slot_time.strftime("%a %d - %I:%M %p").lower()
+            connection.execute(
+                """
+                INSERT INTO slots (id, doctor_id, scheduled_at, display_time, is_booked)
+                VALUES (?, ?, ?, ?, 0)
+                """,
+                (
+                    make_id("slot"),
+                    doctor_id,
+                    next_slot_time.isoformat().replace("+00:00", "Z"),
+                    display_time,
+                ),
+            )
+        connection.commit()
 
 
 def seed_database(connection: sqlite3.Connection) -> None:

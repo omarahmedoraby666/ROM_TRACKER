@@ -7,18 +7,11 @@ import 'package:rom_tracker_app/features/onboarding_auth/data/backend_auth_api.d
 import 'package:rom_tracker_app/features/onboarding_auth/presentation/models/auth_session_store.dart';
 import 'package:rom_tracker_app/features/sessions/data/backend_sessions_api.dart';
 
-class _RealHttpOverrides extends HttpOverrides {
-  @override
-  HttpClient createHttpClient(SecurityContext? context) {
-    return super.createHttpClient(context);
-  }
-}
-
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUpAll(() {
-    HttpOverrides.global = _RealHttpOverrides();
+    HttpOverrides.global = null;
   });
 
   tearDown(() {

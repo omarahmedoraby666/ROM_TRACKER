@@ -25,7 +25,12 @@ class BackendDoctorsApi implements DoctorsContract {
     if (result.isFailure) {
       throw Exception(result.failure?.message ?? 'Failed to load doctors');
     }
-    return result.data!.map(_mapDoctorProfile).toList();
+    return result.data!
+        .where(
+          (item) => !((item['fullName'] ?? '').toString().toLowerCase().contains('pending doctor')),
+        )
+        .map(mapDoctorProfile)
+        .toList();
   }
 
   Future<List<DoctorSlot>> fetchDoctorSlots(String doctorId) async {
@@ -34,6 +39,14 @@ class BackendDoctorsApi implements DoctorsContract {
       throw Exception(result.failure?.message ?? 'Failed to load slots');
     }
     return result.data!.map(DoctorSlot.fromJson).toList();
+  }
+
+  Future<DoctorProfile> fetchDoctorProfileById(String doctorId) async {
+    final result = await getDoctorDetails(doctorId);
+    if (result.isFailure || result.data == null) {
+      throw Exception(result.failure?.message ?? 'Failed to load doctor details');
+    }
+    return mapDoctorProfile(result.data!);
   }
 
   @override
@@ -99,7 +112,7 @@ class BackendDoctorsApi implements DoctorsContract {
         : const BackendResult.success(null);
   }
 
-  DoctorProfile _mapDoctorProfile(JsonMap json) {
+  static DoctorProfile mapDoctorProfile(JsonMap json) {
     final fullName = (json['fullName'] ?? '').toString();
     final displayName =
         fullName.toLowerCase().startsWith('dr.') ? fullName : 'Dr. $fullName';

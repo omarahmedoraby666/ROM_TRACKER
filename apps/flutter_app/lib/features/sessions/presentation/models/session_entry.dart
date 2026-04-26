@@ -3,6 +3,7 @@ enum SessionStage { upcoming, completed, canceled }
 class SessionEntry {
   const SessionEntry({
     required this.id,
+    this.doctorId,
     required this.doctorName,
     required this.specialty,
     required this.time,
@@ -12,6 +13,7 @@ class SessionEntry {
   });
 
   final String id;
+  final String? doctorId;
   final String doctorName;
   final String specialty;
   final String time;
@@ -21,6 +23,7 @@ class SessionEntry {
 
   SessionEntry copyWith({
     String? id,
+    String? doctorId,
     String? doctorName,
     String? specialty,
     String? time,
@@ -30,6 +33,7 @@ class SessionEntry {
   }) {
     return SessionEntry(
       id: id ?? this.id,
+      doctorId: doctorId ?? this.doctorId,
       doctorName: doctorName ?? this.doctorName,
       specialty: specialty ?? this.specialty,
       time: time ?? this.time,

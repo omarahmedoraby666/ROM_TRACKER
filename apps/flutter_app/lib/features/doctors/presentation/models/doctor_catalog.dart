@@ -59,6 +59,24 @@ class DoctorCatalog {
     if (normalized.contains('sara')) return AppAssets.phase2DoctorSara;
     if (normalized.contains('lina')) return AppAssets.phase2DoctorLina;
     if (normalized.contains('ahmed')) return AppAssets.phase2DoctorAhmed;
-    return AppAssets.phase2DoctorMohamed;
+    return AppAssets.phase2DoctorAvatar;
+  }
+
+  static DoctorProfile? findById(String? id) {
+    if (id == null || id.isEmpty) return null;
+    for (final doctor in topDoctors) {
+      if (doctor.id == id) return doctor;
+    }
+    return null;
+  }
+
+  static DoctorProfile? findByName(String name) {
+    final normalized = name.trim().toLowerCase();
+    for (final doctor in topDoctors) {
+      if (doctor.name.trim().toLowerCase() == normalized) {
+        return doctor;
+      }
+    }
+    return null;
   }
 }

@@ -110,6 +110,7 @@ class BookingStore {
   static String addUpcoming(PatientBooking booking) {
     ensureSeeded();
     final entry = _entry(
+      doctorId: booking.doctorId,
       doctorName: booking.doctorName,
       specialty: booking.specialty,
       time: '${booking.dayLabel} ${booking.dayNumber} - ${booking.timeLabel}',
@@ -202,6 +203,7 @@ class BookingStore {
   }
 
   static SessionEntry createEntry({
+    String? doctorId,
     required String doctorName,
     required String specialty,
     required String time,
@@ -210,6 +212,7 @@ class BookingStore {
   }) {
     final entry = SessionEntry(
       id: _nextId(),
+      doctorId: doctorId,
       doctorName: doctorName,
       specialty: specialty,
       time: time,
@@ -275,12 +278,14 @@ class BookingStore {
   }
 
   static SessionEntry _entry({
+    String? doctorId,
     required String doctorName,
     required String specialty,
     required String time,
     required String imagePath,
   }) {
     return createEntry(
+      doctorId: doctorId,
       doctorName: doctorName,
       specialty: specialty,
       time: time,

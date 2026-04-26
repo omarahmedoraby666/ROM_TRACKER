@@ -85,7 +85,10 @@ class PaymentSuccessPage extends StatelessWidget {
                         onPressed: () {
                           Navigator.of(context).pushAndRemoveUntil(
                             MaterialPageRoute(
-                              builder: (_) => MainLayout(userType: userType),
+                              builder: (_) => MainLayout(
+                                userType: userType,
+                                initialIndex: 1,
+                              ),
                             ),
                             (route) => false,
                           );
@@ -97,7 +100,7 @@ class PaymentSuccessPage extends StatelessWidget {
                           ),
                         ),
                         child: Text(
-                          'Back to Home',
+                          'Go to Sessions',
                           style: GoogleFonts.inter(
                             color: Colors.white,
                             fontWeight: FontWeight.w600,

@@ -10,6 +10,7 @@ class BackendSessionMapper {
   static SessionEntry toPatientSession(Map<String, dynamic> json) {
     return SessionEntry(
       id: (json['id'] ?? '').toString(),
+      doctorId: (json['doctorId'] ?? '').toString(),
       doctorName: _ensureDoctorPrefix((json['doctorName'] ?? '').toString()),
       specialty: (json['specialty'] ?? '').toString(),
       time: (json['displayTime'] ?? '').toString(),
