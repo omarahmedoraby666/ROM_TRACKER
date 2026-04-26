@@ -1,7 +1,10 @@
+import 'package:rom_tracker_app/core/network/backend_client.dart';
 import 'package:rom_tracker_app/features/chat/presentation/models/chat_store.dart';
 import 'package:rom_tracker_app/features/doctors/presentation/models/doctor_catalog.dart';
 import 'package:rom_tracker_app/features/notifications/presentation/models/notification_store.dart';
+import 'package:rom_tracker_app/features/onboarding_auth/presentation/models/auth_session_store.dart';
 import 'package:rom_tracker_app/features/payment_wallet/presentation/models/doctor_wallet_store.dart';
+import 'package:rom_tracker_app/features/sessions/data/backend_sessions_api.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/booking_store.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/doctor_session_entry.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/doctor_session_store.dart';
@@ -16,7 +19,31 @@ class LocalDemoSyncStore {
   static final Map<String, String> _doctorToPatient = {};
   static final Map<String, String> _patientToWalletTransaction = {};
 
-  static String confirmPatientBooking(PatientBooking booking) {
+  static bool get _useBackend =>
+      BackendClient.instance.isConfigured && AuthSessionStore.isAuthenticated;
+
+  static Future<String?> confirmPatientBooking(PatientBooking booking) async {
+    if (_useBackend && booking.doctorId != null && booking.slotId != null) {
+      final result = await BackendSessionsApi.instance.createBooking({
+        'doctorId': booking.doctorId,
+        'slotId': booking.slotId,
+        'reason': booking.reason,
+        if (booking.patientAge != null)
+          'patientAge': int.tryParse(booking.patientAge!),
+        if (booking.patientGender != null) 'patientGender': booking.patientGender,
+      });
+      if (result.isFailure) {
+        throw Exception(result.failure?.message ?? 'Booking failed');
+      }
+      await BookingStore.refreshFromBackend();
+      await NotificationStore.refreshFromBackend();
+      final session = result.data?['session'];
+      if (session is Map) {
+        return (session['id'] ?? '').toString();
+      }
+      return null;
+    }
+
     final patientSessionId = BookingStore.addUpcoming(booking);
     NotificationStore.addPatientBookingFlow(booking);
 
@@ -57,7 +84,20 @@ class LocalDemoSyncStore {
     return patientSessionId;
   }
 
-  static void patientCancelUpcoming(String patientSessionId) {
+  static Future<void> patientCancelUpcoming(String patientSessionId) async {
+    if (_useBackend) {
+      final result = await BackendSessionsApi.instance.updateSessionStatus(
+        sessionId: patientSessionId,
+        status: 'canceled',
+      );
+      if (result.isFailure) {
+        throw Exception(result.failure?.message ?? 'Failed to cancel session');
+      }
+      await BookingStore.refreshFromBackend();
+      await NotificationStore.refreshFromBackend();
+      return;
+    }
+
     final session = BookingStore.byId(patientSessionId);
     final moved = BookingStore.cancelUpcoming(patientSessionId);
     if (moved == null) return;
@@ -78,7 +118,20 @@ class LocalDemoSyncStore {
     }
   }
 
-  static void patientCompleteUpcoming(String patientSessionId) {
+  static Future<void> patientCompleteUpcoming(String patientSessionId) async {
+    if (_useBackend) {
+      final result = await BackendSessionsApi.instance.updateSessionStatus(
+        sessionId: patientSessionId,
+        status: 'completed',
+      );
+      if (result.isFailure) {
+        throw Exception(result.failure?.message ?? 'Failed to complete session');
+      }
+      await BookingStore.refreshFromBackend();
+      await NotificationStore.refreshFromBackend();
+      return;
+    }
+
     final moved = BookingStore.completeUpcoming(patientSessionId);
     if (moved == null) return;
 
@@ -97,7 +150,21 @@ class LocalDemoSyncStore {
     }
   }
 
-  static void doctorCancelUpcoming(String doctorSessionId) {
+  static Future<void> doctorCancelUpcoming(String doctorSessionId) async {
+    if (_useBackend) {
+      final result = await BackendSessionsApi.instance.updateSessionStatus(
+        sessionId: doctorSessionId,
+        status: 'canceled',
+      );
+      if (result.isFailure) {
+        throw Exception(result.failure?.message ?? 'Failed to cancel session');
+      }
+      await DoctorSessionStore.refreshFromBackend();
+      await NotificationStore.refreshFromBackend();
+      await DoctorWalletStore.refreshFromBackend();
+      return;
+    }
+
     final moved = DoctorSessionStore.cancelUpcoming(doctorSessionId);
     if (moved == null) return;
 
@@ -116,7 +183,21 @@ class LocalDemoSyncStore {
     }
   }
 
-  static void doctorCompleteUpcoming(String doctorSessionId) {
+  static Future<void> doctorCompleteUpcoming(String doctorSessionId) async {
+    if (_useBackend) {
+      final result = await BackendSessionsApi.instance.updateSessionStatus(
+        sessionId: doctorSessionId,
+        status: 'completed',
+      );
+      if (result.isFailure) {
+        throw Exception(result.failure?.message ?? 'Failed to complete session');
+      }
+      await DoctorSessionStore.refreshFromBackend();
+      await NotificationStore.refreshFromBackend();
+      await DoctorWalletStore.refreshFromBackend();
+      return;
+    }
+
     final moved = DoctorSessionStore.completeUpcoming(doctorSessionId);
     if (moved == null) return;
 
@@ -135,10 +216,24 @@ class LocalDemoSyncStore {
     }
   }
 
-  static void doctorRestoreToUpcoming({
+  static Future<void> doctorRestoreToUpcoming({
     required DoctorSessionStage fromStage,
     required String doctorSessionId,
-  }) {
+  }) async {
+    if (_useBackend) {
+      final result = await BackendSessionsApi.instance.updateSessionStatus(
+        sessionId: doctorSessionId,
+        status: 'upcoming',
+      );
+      if (result.isFailure) {
+        throw Exception(result.failure?.message ?? 'Failed to restore session');
+      }
+      await DoctorSessionStore.refreshFromBackend();
+      await NotificationStore.refreshFromBackend();
+      await DoctorWalletStore.refreshFromBackend();
+      return;
+    }
+
     final moved = DoctorSessionStore.restoreToUpcoming(
       fromStage: fromStage,
       id: doctorSessionId,

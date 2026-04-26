@@ -15,6 +15,9 @@ abstract class SessionsContract {
   Future<BackendResult<JsonMap>> updateSessionStatus({
     required String sessionId,
     required String status,
+    String? doctorNotes,
+    String? review,
+    int? reviewRating,
   });
 
   Future<BackendResult<void>> submitReview({

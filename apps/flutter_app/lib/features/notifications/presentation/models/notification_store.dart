@@ -1,5 +1,8 @@
 import 'package:flutter/foundation.dart';
+import 'package:rom_tracker_app/core/network/backend_client.dart';
 import 'package:rom_tracker_app/features/chat/presentation/models/chat_store.dart';
+import 'package:rom_tracker_app/features/onboarding_auth/presentation/models/auth_session_store.dart';
+import 'package:rom_tracker_app/features/sessions/data/backend_sessions_api.dart';
 import 'package:rom_tracker_app/features/notifications/presentation/models/app_notification.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/patient_booking.dart';
 
@@ -14,6 +17,13 @@ class NotificationStore {
 
   static void ensureSeeded() {
     if (_seeded) return;
+    if (BackendClient.instance.isConfigured && AuthSessionStore.isAuthenticated) {
+      patientNotifications.value = [];
+      doctorNotifications.value = [];
+      _seeded = true;
+      refreshFromBackend();
+      return;
+    }
     final now = DateTime.now();
 
     patientNotifications.value = [
@@ -78,6 +88,25 @@ class NotificationStore {
   static ValueNotifier<List<AppNotification>> notifierFor(String userType) {
     ensureSeeded();
     return userType == 'Doctor' ? doctorNotifications : patientNotifications;
+  }
+
+  static Future<void> refreshFromBackend() async {
+    if (!BackendClient.instance.isConfigured || !AuthSessionStore.isAuthenticated) {
+      ensureSeeded();
+      return;
+    }
+
+    final result = await BackendSessionsApi.instance.getNotifications();
+    if (result.isFailure) return;
+
+    final items = result.data!.map(_fromBackend).toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    if (AuthSessionStore.userType.value == 'Doctor') {
+      doctorNotifications.value = items;
+    } else {
+      patientNotifications.value = items;
+    }
+    _seeded = true;
   }
 
   static void markAllRead(String userType) {
@@ -206,6 +235,34 @@ class NotificationStore {
       target: target,
       threadId: threadId,
       isRead: isRead,
+    );
+  }
+
+  static void reset() {
+    patientNotifications.value = [];
+    doctorNotifications.value = [];
+    _seeded = false;
+  }
+
+  static AppNotification _fromBackend(Map<String, dynamic> json) {
+    final type = switch ((json['type'] ?? '').toString()) {
+      'message' => AppNotificationType.message,
+      'reminder' => AppNotificationType.reminder,
+      'system' => AppNotificationType.system,
+      _ => AppNotificationType.session,
+    };
+    final title = (json['title'] ?? '').toString();
+    return AppNotification(
+      id: (json['id'] ?? '').toString(),
+      title: title,
+      body: (json['body'] ?? '').toString(),
+      createdAt: DateTime.tryParse((json['createdAt'] ?? '').toString()) ??
+          DateTime.now(),
+      type: type,
+      target: title.toLowerCase().contains('message')
+          ? AppNotificationTarget.chat
+          : AppNotificationTarget.sessions,
+      isRead: json['isRead'] == true,
     );
   }
 }

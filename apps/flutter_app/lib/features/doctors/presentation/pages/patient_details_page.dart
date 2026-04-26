@@ -29,6 +29,12 @@ class _PatientDetailsPageState extends State<PatientDetailsPage> {
   String _selectedGender = 'Male';
 
   @override
+  void initState() {
+    super.initState();
+    _problemController.text = widget.booking.reason;
+  }
+
+  @override
   Widget build(BuildContext context) {
     return AppPageShell(
       title: 'Patient Details',
@@ -139,6 +145,8 @@ class _PatientDetailsPageState extends State<PatientDetailsPage> {
       MaterialPageRoute(
         builder: (_) => PaymentMethodsPage(
           booking: PatientBooking(
+            doctorId: widget.booking.doctorId,
+            slotId: widget.booking.slotId,
             doctorName: widget.booking.doctorName,
             specialty: widget.booking.specialty,
             imagePath: widget.booking.imagePath,

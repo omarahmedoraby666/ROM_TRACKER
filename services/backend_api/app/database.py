@@ -186,6 +186,7 @@ def initialize_database() -> None:
         )
         ensure_migrations(connection)
         seed_database(connection)
+        reconcile_slot_booking_flags(connection)
 
 
 def ensure_migrations(connection: sqlite3.Connection) -> None:
@@ -208,6 +209,22 @@ def ensure_migrations(connection: sqlite3.Connection) -> None:
             "ALTER TABLE sessions ADD COLUMN started_at TEXT"
         )
         connection.commit()
+
+
+def reconcile_slot_booking_flags(connection: sqlite3.Connection) -> None:
+    connection.execute("UPDATE slots SET is_booked = 0")
+    connection.execute(
+        """
+        UPDATE slots
+        SET is_booked = 1
+        WHERE id IN (
+            SELECT slot_id
+            FROM sessions
+            WHERE status IN ('upcoming', 'completed')
+        )
+        """
+    )
+    connection.commit()
 
 
 def seed_database(connection: sqlite3.Connection) -> None:
@@ -985,10 +1002,24 @@ def list_slots_for_doctor(doctor_id: str) -> List[Dict[str, Any]]:
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT id, doctor_id, scheduled_at, display_time, is_booked
+            SELECT
+                sl.id,
+                sl.doctor_id,
+                sl.scheduled_at,
+                sl.display_time,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM sessions s
+                        WHERE s.slot_id = sl.id
+                          AND s.status IN ('upcoming', 'completed')
+                    ) THEN 1
+                    ELSE 0
+                END AS is_booked
             FROM slots
-            WHERE doctor_id = ?
-            ORDER BY scheduled_at ASC
+            sl
+            WHERE sl.doctor_id = ?
+            ORDER BY sl.scheduled_at ASC
             """,
             (doctor_id,),
         ).fetchall()
@@ -997,7 +1028,43 @@ def list_slots_for_doctor(doctor_id: str) -> List[Dict[str, Any]]:
 
 def get_slot(slot_id: str) -> Optional[Dict[str, Any]]:
     with get_connection() as connection:
-        row = connection.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+        row = connection.execute(
+            """
+            SELECT
+                sl.*,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM sessions s
+                        WHERE s.slot_id = sl.id
+                          AND s.status IN ('upcoming', 'completed')
+                    ) THEN 1
+                    ELSE 0
+                END AS is_booked
+            FROM slots sl
+            WHERE sl.id = ?
+            """,
+            (slot_id,),
+        ).fetchone()
+        return row_to_dict(row)
+
+
+def get_latest_session_for_slot(slot_id: str) -> Optional[Dict[str, Any]]:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT s.*, p.full_name AS patient_name, d.full_name AS doctor_name,
+                   dp.specialization AS specialty
+            FROM sessions s
+            JOIN users p ON p.id = s.patient_id
+            JOIN users d ON d.id = s.doctor_id
+            JOIN doctor_profiles dp ON dp.user_id = s.doctor_id
+            WHERE s.slot_id = ?
+            ORDER BY s.updated_at DESC, s.created_at DESC
+            LIMIT 1
+            """,
+            (slot_id,),
+        ).fetchone()
         return row_to_dict(row)
 
 
@@ -1032,44 +1099,90 @@ def create_booking(
         raise ValueError("Selected slot was not found")
     if slot["doctor_id"] != doctor_id:
         raise ValueError("Selected slot does not belong to the requested doctor")
-    if slot["is_booked"]:
+    timestamp = now_iso()
+    existing_session = get_latest_session_for_slot(slot_id)
+
+    if slot["is_booked"] or (
+        existing_session
+        and existing_session["status"] in {"upcoming", "completed"}
+    ):
         raise ValueError("Selected slot is already booked")
 
-    session_id = make_id("session")
-    timestamp = now_iso()
+    if existing_session and existing_session["status"] == "canceled":
+        session_id = existing_session["id"]
+        with get_connection() as connection:
+            connection.execute("DELETE FROM ai_results WHERE session_id = ?", (session_id,))
+            connection.execute("DELETE FROM reviews WHERE session_id = ?", (session_id,))
+            connection.execute(
+                """
+                UPDATE sessions
+                SET patient_id = ?,
+                    doctor_id = ?,
+                    status = 'upcoming',
+                    reason = ?,
+                    scheduled_at = ?,
+                    display_time = ?,
+                    patient_age = ?,
+                    patient_gender = ?,
+                    doctor_notes = '',
+                    review = NULL,
+                    review_rating = NULL,
+                    started_at = NULL,
+                    payment_status = 'paid',
+                    created_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    patient_id,
+                    doctor_id,
+                    reason,
+                    slot["scheduled_at"],
+                    slot["display_time"],
+                    patient_age,
+                    patient_gender,
+                    timestamp,
+                    timestamp,
+                    session_id,
+                ),
+            )
+            connection.execute("UPDATE slots SET is_booked = 1 WHERE id = ?", (slot_id,))
+            connection.commit()
+    else:
+        session_id = make_id("session")
 
-    with get_connection() as connection:
-        connection.execute(
-            """
-            INSERT INTO sessions (
-                id, patient_id, doctor_id, slot_id, status, reason,
-                scheduled_at, display_time, patient_age, patient_gender,
-                doctor_notes, review, review_rating, payment_status,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, 'upcoming', ?, ?, ?, ?, ?, '', NULL, NULL, 'paid', ?, ?)
-            """,
-            (
-                session_id,
-                patient_id,
-                doctor_id,
-                slot_id,
-                reason,
-                slot["scheduled_at"],
-                slot["display_time"],
-                patient_age,
-                patient_gender,
-                timestamp,
-                timestamp,
-            ),
-        )
-        connection.execute("UPDATE slots SET is_booked = 1 WHERE id = ?", (slot_id,))
-        connection.commit()
+        with get_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO sessions (
+                    id, patient_id, doctor_id, slot_id, status, reason,
+                    scheduled_at, display_time, patient_age, patient_gender,
+                    doctor_notes, review, review_rating, payment_status,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'upcoming', ?, ?, ?, ?, ?, '', NULL, NULL, 'paid', ?, ?)
+                """,
+                (
+                    session_id,
+                    patient_id,
+                    doctor_id,
+                    slot_id,
+                    reason,
+                    slot["scheduled_at"],
+                    slot["display_time"],
+                    patient_age,
+                    patient_gender,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.execute("UPDATE slots SET is_booked = 1 WHERE id = ?", (slot_id,))
+            connection.commit()
 
     session = get_session(session_id)
     if not session:
         raise ValueError("Booking was created but could not be loaded")
 
-    ensure_wallet_transaction_for_session(session)
+    sync_wallet_transaction_status(session, "pending")
 
     create_notification(
         user_id=patient_id,

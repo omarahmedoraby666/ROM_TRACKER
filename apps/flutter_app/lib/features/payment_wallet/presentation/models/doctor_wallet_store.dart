@@ -1,4 +1,7 @@
 import 'package:flutter/foundation.dart';
+import 'package:rom_tracker_app/core/network/backend_client.dart';
+import 'package:rom_tracker_app/features/onboarding_auth/presentation/models/auth_session_store.dart';
+import 'package:rom_tracker_app/features/sessions/data/backend_sessions_api.dart';
 import 'package:rom_tracker_app/features/payment_wallet/presentation/models/doctor_wallet_transaction.dart';
 
 class DoctorWalletStore {
@@ -10,6 +13,14 @@ class DoctorWalletStore {
 
   static void ensureSeeded() {
     if (_seeded) return;
+    if (BackendClient.instance.isConfigured &&
+        AuthSessionStore.isAuthenticated &&
+        AuthSessionStore.userType.value == 'Doctor') {
+      transactions.value = [];
+      _seeded = true;
+      refreshFromBackend();
+      return;
+    }
     transactions.value = [
       _entry(
         title: 'Receive',
@@ -24,6 +35,26 @@ class DoctorWalletStore {
         status: DoctorWalletTransactionStatus.available,
       ),
     ];
+    _seeded = true;
+  }
+
+  static Future<void> refreshFromBackend() async {
+    if (!BackendClient.instance.isConfigured ||
+        !AuthSessionStore.isAuthenticated ||
+        AuthSessionStore.userType.value != 'Doctor') {
+      ensureSeeded();
+      return;
+    }
+
+    final result = await BackendSessionsApi.instance.getDoctorWallet();
+    if (result.isFailure) return;
+    final rawItems = result.data?['items'];
+    if (rawItems is! List) return;
+
+    transactions.value = rawItems
+        .whereType<Map>()
+        .map((item) => _fromBackend(Map<String, dynamic>.from(item)))
+        .toList();
     _seeded = true;
   }
 
@@ -93,6 +124,28 @@ class DoctorWalletStore {
       amount: amount,
       status: status,
       linkedDoctorSessionId: linkedDoctorSessionId,
+    );
+  }
+
+  static void reset() {
+    transactions.value = [];
+    _seeded = false;
+  }
+
+  static DoctorWalletTransaction _fromBackend(Map<String, dynamic> json) {
+    final status = switch ((json['status'] ?? '').toString()) {
+      'available' => DoctorWalletTransactionStatus.available,
+      'canceled' => DoctorWalletTransactionStatus.canceled,
+      _ => DoctorWalletTransactionStatus.pending,
+    };
+    return DoctorWalletTransaction(
+      id: (json['id'] ?? '').toString(),
+      title: 'Receive',
+      subtitle:
+          '${(json['patientName'] ?? '').toString()} - ${(json['description'] ?? '').toString()}',
+      amount: ((json['amount'] ?? 0) as num?)?.toInt() ?? 0,
+      status: status,
+      linkedDoctorSessionId: (json['sessionId'] ?? '').toString(),
     );
   }
 }

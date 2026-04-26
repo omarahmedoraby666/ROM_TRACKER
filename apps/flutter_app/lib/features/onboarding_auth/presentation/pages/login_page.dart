@@ -5,12 +5,20 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:rom_tracker_app/core/constants/app_assets.dart';
 import 'package:rom_tracker_app/core/constants/app_colors.dart';
 import 'package:rom_tracker_app/features/home/presentation/pages/main_layout.dart';
+import 'package:rom_tracker_app/features/onboarding_auth/data/auth_contract.dart';
+import 'package:rom_tracker_app/features/onboarding_auth/data/backend_auth_api.dart';
 import 'package:rom_tracker_app/features/onboarding_auth/presentation/models/mock_auth_service.dart';
+import 'package:rom_tracker_app/features/onboarding_auth/presentation/models/auth_session_store.dart';
 import 'package:rom_tracker_app/features/onboarding_auth/presentation/models/registration_draft.dart';
 import 'package:rom_tracker_app/features/onboarding_auth/presentation/pages/auth_entry_page.dart';
 import 'package:rom_tracker_app/features/onboarding_auth/presentation/pages/data_review_page.dart';
 import 'package:rom_tracker_app/features/onboarding_auth/presentation/pages/doctor_rejection_page.dart';
 import 'package:rom_tracker_app/features/onboarding_auth/presentation/pages/forget_password_page.dart';
+import 'package:rom_tracker_app/features/payment_wallet/presentation/models/doctor_wallet_store.dart';
+import 'package:rom_tracker_app/features/notifications/presentation/models/notification_store.dart';
+import 'package:rom_tracker_app/features/sessions/presentation/models/booking_store.dart';
+import 'package:rom_tracker_app/features/sessions/presentation/models/doctor_session_store.dart';
+import 'package:rom_tracker_app/features/user_profile/presentation/models/user_profile_store.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -29,6 +37,7 @@ class _LoginPageState extends State<LoginPage> {
   bool _isPasswordVisible = false;
   bool _hasError = false;
   String? _errorText;
+  bool _isSubmitting = false;
 
   @override
   Widget build(BuildContext context) {
@@ -158,21 +167,30 @@ class _LoginPageState extends State<LoginPage> {
                   width: double.infinity,
                   height: 40.h,
                   child: ElevatedButton(
-                    onPressed: _handleLogin,
+                    onPressed: _isSubmitting ? null : _handleLogin,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16.r),
                       ),
                     ),
-                    child: Text(
-                      'Login',
-                      style: GoogleFonts.inter(
-                        fontSize: 16.sp,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                      ),
-                    ),
+                    child: _isSubmitting
+                        ? SizedBox(
+                            width: 20.w,
+                            height: 20.w,
+                            child: const CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : Text(
+                            'Login',
+                            style: GoogleFonts.inter(
+                              fontSize: 16.sp,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
                   ),
                 ),
                 SizedBox(height: 28.h),
@@ -275,7 +293,7 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  void _handleLogin() {
+  Future<void> _handleLogin() async {
     setState(() {
       _hasError = false;
       _errorText = null;
@@ -283,19 +301,75 @@ class _LoginPageState extends State<LoginPage> {
 
     if (!_formKey.currentState!.validate()) return;
 
-    final result = MockAuthService.login(
-      email: _emailController.text.trim(),
-      password: _passwordController.text.trim(),
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+
+    final localResult = MockAuthService.login(
+      email: email,
+      password: password,
     );
 
-    if (result == null) {
+    if (localResult != null &&
+        localResult.userType == 'Doctor' &&
+        localResult.status != 'approved') {
+      _resetAppSession();
+      _continueWithAuthResult(localResult);
+      return;
+    }
+
+    setState(() => _isSubmitting = true);
+
+    final backendResult = await BackendAuthApi.instance.login(
+      LoginRequest(
+        email: email,
+        password: password,
+      ),
+    );
+
+    if (!mounted) return;
+    setState(() => _isSubmitting = false);
+
+    if (backendResult.isFailure) {
       setState(() {
         _hasError = true;
-        _errorText = 'Wrong email or password';
+        _errorText =
+            backendResult.failure?.message ?? 'Wrong email or password';
       });
       return;
     }
 
+    final session = backendResult.data!;
+    final user = session.user;
+    final role = (user['role'] ?? '').toString().toLowerCase();
+    final status = (user['approvalStatus'] ?? 'approved').toString();
+    final userType = role == 'doctor' ? 'Doctor' : 'Patient';
+
+    _resetAppSession();
+    AuthSessionStore.setSession(
+      token: session.accessToken,
+      resolvedUserType: userType,
+      resolvedApprovalStatus: status,
+    );
+    UserProfileStore.setFromBackendUser(user);
+
+    _continueWithAuthResult(
+      MockAuthResult(
+        userType: userType,
+        status: status,
+      ),
+    );
+  }
+
+  void _resetAppSession() {
+    AuthSessionStore.clear();
+    BookingStore.reset();
+    DoctorSessionStore.reset();
+    NotificationStore.reset();
+    DoctorWalletStore.reset();
+    UserProfileStore.reset();
+  }
+
+  void _continueWithAuthResult(MockAuthResult result) {
     if (result.userType == 'Doctor' && result.status == 'pending') {
       Navigator.pushReplacement(
         context,

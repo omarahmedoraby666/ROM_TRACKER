@@ -7,13 +7,23 @@ import 'package:rom_tracker_app/features/payment_wallet/presentation/models/doct
 import 'package:rom_tracker_app/features/user_profile/presentation/models/user_profile_data.dart';
 import 'package:rom_tracker_app/features/user_profile/presentation/models/user_profile_store.dart';
 
-class DoctorWalletPage extends StatelessWidget {
+class DoctorWalletPage extends StatefulWidget {
   const DoctorWalletPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    DoctorWalletStore.ensureSeeded();
+  State<DoctorWalletPage> createState() => _DoctorWalletPageState();
+}
 
+class _DoctorWalletPageState extends State<DoctorWalletPage> {
+  @override
+  void initState() {
+    super.initState();
+    DoctorWalletStore.ensureSeeded();
+    DoctorWalletStore.refreshFromBackend();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(

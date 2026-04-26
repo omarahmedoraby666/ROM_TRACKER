@@ -25,6 +25,7 @@ class _DoctorHomePageState extends State<DoctorHomePage> {
   void initState() {
     super.initState();
     DoctorSessionStore.ensureSeeded();
+    DoctorSessionStore.refreshFromBackend();
   }
 
   @override

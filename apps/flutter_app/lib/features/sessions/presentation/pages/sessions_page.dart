@@ -2,12 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:rom_tracker_app/core/constants/app_colors.dart';
+import 'package:rom_tracker_app/core/network/backend_client.dart';
 import 'package:rom_tracker_app/core/widgets/app_search_bar.dart';
 import 'package:rom_tracker_app/core/widgets/app_user_header.dart';
 import 'package:rom_tracker_app/core/widgets/user_avatar.dart';
 import 'package:rom_tracker_app/features/home/presentation/pages/main_layout.dart';
 import 'package:rom_tracker_app/features/notifications/presentation/pages/notifications_page.dart';
 import 'package:rom_tracker_app/features/payment_wallet/presentation/pages/payment_methods_page.dart';
+import 'package:rom_tracker_app/features/sessions/data/backend_sessions_api.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/booking_store.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/local_demo_sync_store.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/patient_booking.dart';
@@ -42,6 +44,7 @@ class _SessionsPageState extends State<SessionsPage> {
     super.initState();
     if (widget.userType != 'Doctor') {
       BookingStore.ensureSeeded();
+      BookingStore.refreshFromBackend();
     }
   }
 
@@ -171,13 +174,13 @@ class _SessionsPageState extends State<SessionsPage> {
                     .map(
                       (session) => _PatientUpcomingCard(
                         session: session,
-                        onCancel: () =>
-                            LocalDemoSyncStore.patientCancelUpcoming(
-                          session.id,
+                        onCancel: () => _handlePatientStatusUpdate(
+                          sessionId: session.id,
+                          action: 'cancel',
                         ),
-                        onComplete: () =>
-                            LocalDemoSyncStore.patientCompleteUpcoming(
-                          session.id,
+                        onComplete: () => _handlePatientStatusUpdate(
+                          sessionId: session.id,
+                          action: 'complete',
                         ),
                       ),
                     )
@@ -287,14 +290,37 @@ class _SessionsPageState extends State<SessionsPage> {
               child: const Text('Cancel'),
             ),
             ElevatedButton(
-              onPressed: () {
+              onPressed: () async {
                 final review = controller.text.trim();
                 if (review.isEmpty) return;
-                BookingStore.saveReview(
-                  stage: stage,
-                  id: session.id,
-                  review: review,
-                );
+                if (BackendClient.instance.isConfigured) {
+                  final result = await BackendSessionsApi.instance.submitReview(
+                    sessionId: session.id,
+                    payload: {
+                      'rating': 5,
+                      'comment': review,
+                    },
+                  );
+                  if (result.isFailure) {
+                    if (!mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          result.failure?.message ?? 'Failed to submit review',
+                        ),
+                      ),
+                    );
+                    return;
+                  }
+                  await BookingStore.refreshFromBackend();
+                } else {
+                  BookingStore.saveReview(
+                    stage: stage,
+                    id: session.id,
+                    review: review,
+                  );
+                }
+                if (!mounted) return;
                 Navigator.pop(context);
               },
               child: const Text('Save'),
@@ -322,6 +348,24 @@ class _SessionsPageState extends State<SessionsPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _handlePatientStatusUpdate({
+    required String sessionId,
+    required String action,
+  }) async {
+    try {
+      if (action == 'cancel') {
+        await LocalDemoSyncStore.patientCancelUpcoming(sessionId);
+      } else {
+        await LocalDemoSyncStore.patientCompleteUpcoming(sessionId);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    }
   }
 
   List<Widget> _doctorCards() {

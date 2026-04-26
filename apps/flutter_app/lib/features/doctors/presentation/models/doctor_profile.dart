@@ -1,5 +1,6 @@
 class DoctorProfile {
   const DoctorProfile({
+    this.id,
     required this.name,
     required this.specialty,
     required this.experienceYears,
@@ -7,8 +8,10 @@ class DoctorProfile {
     required this.sessionPrice,
     required this.imagePath,
     required this.bio,
+    this.clinicAddress,
   });
 
+  final String? id;
   final String name;
   final String specialty;
   final int experienceYears;
@@ -16,4 +19,5 @@ class DoctorProfile {
   final String sessionPrice;
   final String imagePath;
   final String bio;
+  final String? clinicAddress;
 }

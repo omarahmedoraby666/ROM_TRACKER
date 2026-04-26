@@ -23,6 +23,7 @@ class PaymentMethodsPage extends StatefulWidget {
 
 class _PaymentMethodsPageState extends State<PaymentMethodsPage> {
   String selectedMethod = 'PayPal';
+  bool _isSubmitting = false;
 
   @override
   Widget build(BuildContext context) {
@@ -142,7 +143,9 @@ class _PaymentMethodsPageState extends State<PaymentMethodsPage> {
                       width: double.infinity,
                       height: 56.h,
                       child: ElevatedButton(
-                        onPressed: () {
+                        onPressed: _isSubmitting
+                            ? null
+                            : () async {
                           if (selectedMethod != 'Cash') {
                             Navigator.push(
                               context,
@@ -157,18 +160,32 @@ class _PaymentMethodsPageState extends State<PaymentMethodsPage> {
                             return;
                           }
                           if (widget.booking != null) {
-                            LocalDemoSyncStore.confirmPatientBooking(
-                              widget.booking!,
-                            );
+                            setState(() => _isSubmitting = true);
+                            try {
+                              await LocalDemoSyncStore.confirmPatientBooking(
+                                widget.booking!,
+                              );
+                              if (!mounted) return;
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const PaymentSuccessPage(
+                                    userType: 'Patient',
+                                  ),
+                                ),
+                              );
+                            } catch (error) {
+                              if (!mounted) return;
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(error.toString())),
+                              );
+                            } finally {
+                              if (mounted) {
+                                setState(() => _isSubmitting = false);
+                              }
+                            }
+                            return;
                           }
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const PaymentSuccessPage(
-                                userType: 'Patient',
-                              ),
-                            ),
-                          );
                         },
                         style: ElevatedButton.styleFrom(
                           backgroundColor: AppColors.primary,
@@ -176,17 +193,26 @@ class _PaymentMethodsPageState extends State<PaymentMethodsPage> {
                             borderRadius: BorderRadius.circular(16.r),
                           ),
                         ),
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Text(
-                            'Confirm Payment',
-                            style: GoogleFonts.inter(
-                              fontSize: 16.sp,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
+                        child: _isSubmitting
+                            ? SizedBox(
+                                width: 20.w,
+                                height: 20.w,
+                                child: const CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Text(
+                                  'Confirm Payment',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 16.sp,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
                       ),
                     ),
                   ],

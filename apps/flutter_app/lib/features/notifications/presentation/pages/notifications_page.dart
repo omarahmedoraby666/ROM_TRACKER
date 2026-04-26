@@ -28,6 +28,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   void initState() {
     super.initState();
     NotificationStore.ensureSeeded();
+    NotificationStore.refreshFromBackend();
     SchedulerBinding.instance.addPostFrameCallback((_) {
       NotificationStore.markAllRead(widget.userType);
     });

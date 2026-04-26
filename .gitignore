@@ -17,6 +17,7 @@ apps/flutter_app/.packages
 services/backend_api/data/
 services/backend_api/app/__pycache__/
 services/backend_api/.venv/
+services/backend_api/logs/
 
 # OS / IDE
 Thumbs.db

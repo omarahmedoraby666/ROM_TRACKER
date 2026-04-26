@@ -31,6 +31,7 @@ class _AddCardPageState extends State<AddCardPage> {
   final _expiryController = TextEditingController();
   final _codeController = TextEditingController();
   bool _saveCard = false;
+  bool _isSubmitting = false;
 
   DemoPaymentConfig get _config => DemoPaymentConfig.of(
         widget.selectedMethod,
@@ -260,21 +261,36 @@ class _AddCardPageState extends State<AddCardPage> {
                   width: double.infinity,
                   height: 56.h,
                   child: ElevatedButton(
-                    onPressed: () {
+                    onPressed: _isSubmitting
+                        ? null
+                        : () async {
                       if (!_formKey.currentState!.validate()) return;
-                      if (widget.booking != null) {
-                        LocalDemoSyncStore.confirmPatientBooking(
-                          widget.booking!,
-                        );
-                      }
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const PaymentSuccessPage(
-                            userType: 'Patient',
+                      setState(() => _isSubmitting = true);
+                      try {
+                        if (widget.booking != null) {
+                          await LocalDemoSyncStore.confirmPatientBooking(
+                            widget.booking!,
+                          );
+                        }
+                        if (!mounted) return;
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const PaymentSuccessPage(
+                              userType: 'Patient',
+                            ),
                           ),
-                        ),
-                      );
+                        );
+                      } catch (error) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(error.toString())),
+                        );
+                      } finally {
+                        if (mounted) {
+                          setState(() => _isSubmitting = false);
+                        }
+                      }
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
@@ -282,17 +298,26 @@ class _AddCardPageState extends State<AddCardPage> {
                         borderRadius: BorderRadius.circular(16.r),
                       ),
                     ),
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      child: Text(
-                        'Pay now',
-                        style: GoogleFonts.inter(
-                          fontSize: 16.sp,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                        ),
-                      ),
-                    ),
+                    child: _isSubmitting
+                        ? SizedBox(
+                            width: 20.w,
+                            height: 20.w,
+                            child: const CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              'Pay now',
+                              style: GoogleFonts.inter(
+                                fontSize: 16.sp,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
                   ),
                 ),
                 SizedBox(height: 24.h),

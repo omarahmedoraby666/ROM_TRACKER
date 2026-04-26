@@ -1,5 +1,7 @@
 class PatientBooking {
   const PatientBooking({
+    this.doctorId,
+    this.slotId,
     required this.doctorName,
     required this.specialty,
     required this.imagePath,
@@ -12,6 +14,8 @@ class PatientBooking {
     this.patientGender,
   });
 
+  final String? doctorId;
+  final String? slotId;
   final String doctorName;
   final String specialty;
   final String imagePath;

@@ -1,5 +1,9 @@
 import 'package:flutter/foundation.dart';
+import 'package:rom_tracker_app/core/network/backend_client.dart';
 import 'package:rom_tracker_app/core/constants/app_assets.dart';
+import 'package:rom_tracker_app/features/onboarding_auth/presentation/models/auth_session_store.dart';
+import 'package:rom_tracker_app/features/sessions/data/backend_session_mapper.dart';
+import 'package:rom_tracker_app/features/sessions/data/backend_sessions_api.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/doctor_session_entry.dart';
 
 class DoctorSessionStore {
@@ -15,6 +19,14 @@ class DoctorSessionStore {
 
   static void ensureSeeded() {
     if (_seeded) return;
+    if (BackendClient.instance.isConfigured && AuthSessionStore.isAuthenticated) {
+      upcomingSessions.value = [];
+      completedSessions.value = [];
+      canceledSessions.value = [];
+      _seeded = true;
+      refreshFromBackend();
+      return;
+    }
 
     upcomingSessions.value = [
       _entry(
@@ -89,6 +101,39 @@ class DoctorSessionStore {
     ];
 
     _seeded = true;
+  }
+
+  static Future<void> refreshFromBackend() async {
+    if (!BackendClient.instance.isConfigured || !AuthSessionStore.isAuthenticated) {
+      ensureSeeded();
+      return;
+    }
+
+    final result = await BackendSessionsApi.instance.getDoctorSessions();
+    if (result.isFailure) return;
+
+    final rawItems = result.data!;
+    final items = rawItems.map(BackendSessionMapper.toDoctorSession).toList();
+    upcomingSessions.value = [
+      for (final item in items)
+        if (_statusForItem(rawItems, item.id) == DoctorSessionStage.upcoming) item,
+    ];
+    completedSessions.value = [
+      for (final item in items)
+        if (_statusForItem(rawItems, item.id) == DoctorSessionStage.completed) item,
+    ];
+    canceledSessions.value = [
+      for (final item in items)
+        if (_statusForItem(rawItems, item.id) == DoctorSessionStage.canceled) item,
+    ];
+    _seeded = true;
+  }
+
+  static void reset() {
+    upcomingSessions.value = [];
+    completedSessions.value = [];
+    canceledSessions.value = [];
+    _seeded = false;
   }
 
   static DoctorSessionEntry? byId(String id) {
@@ -255,5 +300,20 @@ class DoctorSessionStore {
   static String _nextId() {
     _counter += 1;
     return 'doctor_session_$_counter';
+  }
+
+  static DoctorSessionStage _statusForItem(
+    List<Map<String, dynamic>> source,
+    String id,
+  ) {
+    final raw = source.firstWhere(
+      (item) => (item['id'] ?? '').toString() == id,
+      orElse: () => const <String, dynamic>{},
+    );
+    return switch ((raw['status'] ?? 'upcoming').toString()) {
+      'completed' => DoctorSessionStage.completed,
+      'canceled' => DoctorSessionStage.canceled,
+      _ => DoctorSessionStage.upcoming,
+    };
   }
 }

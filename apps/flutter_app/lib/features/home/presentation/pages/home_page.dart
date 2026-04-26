@@ -5,6 +5,7 @@ import 'package:rom_tracker_app/core/constants/app_assets.dart';
 import 'package:rom_tracker_app/core/constants/app_colors.dart';
 import 'package:rom_tracker_app/core/widgets/app_search_bar.dart';
 import 'package:rom_tracker_app/core/widgets/app_user_header.dart';
+import 'package:rom_tracker_app/features/doctors/data/backend_doctors_api.dart';
 import 'package:rom_tracker_app/features/doctors/presentation/models/doctor_catalog.dart';
 import 'package:rom_tracker_app/features/doctors/presentation/models/doctor_profile.dart';
 import 'package:rom_tracker_app/features/doctors/presentation/pages/doctor_details_page.dart';
@@ -26,11 +27,35 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _topDoctorsKey = GlobalKey();
+  List<DoctorProfile> _doctors = DoctorCatalog.topDoctors;
+  bool _isLoadingDoctors = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDoctors();
+  }
 
   @override
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadDoctors() async {
+    setState(() => _isLoadingDoctors = true);
+    try {
+      final doctors = await BackendDoctorsApi.instance.fetchDoctorProfiles();
+      if (!mounted || doctors.isEmpty) return;
+      setState(() => _doctors = doctors);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _doctors = DoctorCatalog.topDoctors);
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingDoctors = false);
+      }
+    }
   }
 
   Future<void> _scrollToTopDoctors() async {
@@ -46,7 +71,7 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    final doctors = DoctorCatalog.topDoctors;
+    final doctors = _doctors;
     final isCompact = MediaQuery.sizeOf(context).width < 390;
 
     return Scaffold(
@@ -304,6 +329,11 @@ class _HomePageState extends State<HomePage> {
                   ValueListenableBuilder<Set<String>>(
                     valueListenable: WishlistStore.favorites,
                     builder: (context, favorites, _) {
+                      if (_isLoadingDoctors && doctors.isEmpty) {
+                        return const Center(
+                          child: CircularProgressIndicator(),
+                        );
+                      }
                       return GridView.builder(
                         itemCount: doctors.length,
                         shrinkWrap: true,

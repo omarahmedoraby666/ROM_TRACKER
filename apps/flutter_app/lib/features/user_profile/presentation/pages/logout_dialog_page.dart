@@ -1,7 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:rom_tracker_app/features/notifications/presentation/models/notification_store.dart';
+import 'package:rom_tracker_app/features/onboarding_auth/presentation/models/auth_session_store.dart';
 import 'package:rom_tracker_app/features/onboarding_auth/presentation/pages/auth_entry_page.dart';
+import 'package:rom_tracker_app/features/payment_wallet/presentation/models/doctor_wallet_store.dart';
+import 'package:rom_tracker_app/features/sessions/presentation/models/booking_store.dart';
+import 'package:rom_tracker_app/features/sessions/presentation/models/doctor_session_store.dart';
+import 'package:rom_tracker_app/features/user_profile/presentation/models/user_profile_store.dart';
 
 class LogoutDialogPage extends StatelessWidget {
   const LogoutDialogPage({
@@ -70,6 +76,12 @@ class LogoutDialogPage extends StatelessWidget {
                   Expanded(
                     child: ElevatedButton(
                       onPressed: () {
+                        AuthSessionStore.clear();
+                        BookingStore.reset();
+                        DoctorSessionStore.reset();
+                        NotificationStore.reset();
+                        DoctorWalletStore.reset();
+                        UserProfileStore.reset();
                         Navigator.pushAndRemoveUntil(
                           context,
                           MaterialPageRoute(

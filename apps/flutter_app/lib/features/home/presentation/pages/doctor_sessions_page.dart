@@ -29,6 +29,7 @@ class _DoctorSessionsPageState extends State<DoctorSessionsPage> {
   void initState() {
     super.initState();
     DoctorSessionStore.ensureSeeded();
+    DoctorSessionStore.refreshFromBackend();
   }
 
   @override
@@ -168,9 +169,9 @@ class _DoctorSessionsPageState extends State<DoctorSessionsPage> {
                             ),
                           );
                         },
-                        onCancel: () =>
-                            LocalDemoSyncStore.doctorCancelUpcoming(
-                          session.id,
+                        onCancel: () => _handleDoctorStatusUpdate(
+                          sessionId: session.id,
+                          status: 'canceled',
                         ),
                       ),
                     )
@@ -193,12 +194,11 @@ class _DoctorSessionsPageState extends State<DoctorSessionsPage> {
                     .map(
                       (session) => _DoctorHistoryCard(
                         session: session,
-                        onPrimary: () {
-                          LocalDemoSyncStore.doctorRestoreToUpcoming(
-                            fromStage: DoctorSessionStage.completed,
-                            doctorSessionId: session.id,
-                          );
-                        },
+                        onPrimary: () => _handleDoctorStatusUpdate(
+                          sessionId: session.id,
+                          status: 'upcoming',
+                          sourceStage: DoctorSessionStage.completed,
+                        ),
                         onMessage: () {
                           Navigator.push(
                             context,
@@ -231,12 +231,11 @@ class _DoctorSessionsPageState extends State<DoctorSessionsPage> {
                     .map(
                       (session) => _DoctorHistoryCard(
                         session: session,
-                        onPrimary: () {
-                          LocalDemoSyncStore.doctorRestoreToUpcoming(
-                            fromStage: DoctorSessionStage.canceled,
-                            doctorSessionId: session.id,
-                          );
-                        },
+                        onPrimary: () => _handleDoctorStatusUpdate(
+                          sessionId: session.id,
+                          status: 'upcoming',
+                          sourceStage: DoctorSessionStage.canceled,
+                        ),
                         onMessage: () {
                           Navigator.push(
                             context,
@@ -285,6 +284,35 @@ class _DoctorSessionsPageState extends State<DoctorSessionsPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _handleDoctorStatusUpdate({
+    required String sessionId,
+    required String status,
+    DoctorSessionStage sourceStage = DoctorSessionStage.upcoming,
+  }) async {
+    try {
+      switch (status) {
+        case 'canceled':
+          await LocalDemoSyncStore.doctorCancelUpcoming(sessionId);
+          break;
+        case 'completed':
+          await LocalDemoSyncStore.doctorCompleteUpcoming(sessionId);
+          break;
+        default:
+          await LocalDemoSyncStore.doctorRestoreToUpcoming(
+            fromStage: sourceStage,
+            doctorSessionId: sessionId,
+          );
+      }
+      if (!mounted) return;
+      setState(() {});
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    }
   }
 }
 

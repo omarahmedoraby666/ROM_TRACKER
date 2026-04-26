@@ -1,5 +1,9 @@
 import 'package:flutter/foundation.dart';
+import 'package:rom_tracker_app/core/network/backend_client.dart';
 import 'package:rom_tracker_app/core/constants/app_assets.dart';
+import 'package:rom_tracker_app/features/onboarding_auth/presentation/models/auth_session_store.dart';
+import 'package:rom_tracker_app/features/sessions/data/backend_session_mapper.dart';
+import 'package:rom_tracker_app/features/sessions/data/backend_sessions_api.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/patient_booking.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/session_entry.dart';
 
@@ -16,6 +20,14 @@ class BookingStore {
 
   static void ensureSeeded() {
     if (_seeded) return;
+    if (BackendClient.instance.isConfigured && AuthSessionStore.isAuthenticated) {
+      upcomingSessions.value = [];
+      completedSessions.value = [];
+      canceledSessions.value = [];
+      _seeded = true;
+      refreshFromBackend();
+      return;
+    }
     upcomingSessions.value = [
       _entry(
         doctorName: 'Dr. Mohamed Alaa',
@@ -59,6 +71,40 @@ class BookingStore {
       ),
     ];
     _seeded = true;
+  }
+
+  static Future<void> refreshFromBackend() async {
+    if (!BackendClient.instance.isConfigured || !AuthSessionStore.isAuthenticated) {
+      ensureSeeded();
+      return;
+    }
+
+    final result = await BackendSessionsApi.instance.getPatientSessions();
+    if (result.isFailure) return;
+
+    final items = result.data!
+        .map(BackendSessionMapper.toPatientSession)
+        .toList();
+    upcomingSessions.value = [
+      for (final item in items)
+        if (_statusForItem(result.data!, item.id) == SessionStage.upcoming) item,
+    ];
+    completedSessions.value = [
+      for (final item in items)
+        if (_statusForItem(result.data!, item.id) == SessionStage.completed) item,
+    ];
+    canceledSessions.value = [
+      for (final item in items)
+        if (_statusForItem(result.data!, item.id) == SessionStage.canceled) item,
+    ];
+    _seeded = true;
+  }
+
+  static void reset() {
+    upcomingSessions.value = [];
+    completedSessions.value = [];
+    canceledSessions.value = [];
+    _seeded = false;
   }
 
   static String addUpcoming(PatientBooking booking) {
@@ -261,5 +307,20 @@ class BookingStore {
   static String _nextId() {
     _idCounter += 1;
     return 'session_$_idCounter';
+  }
+
+  static SessionStage _statusForItem(
+    List<Map<String, dynamic>> source,
+    String id,
+  ) {
+    final raw = source.firstWhere(
+      (item) => (item['id'] ?? '').toString() == id,
+      orElse: () => const <String, dynamic>{},
+    );
+    return switch ((raw['status'] ?? 'upcoming').toString()) {
+      'completed' => SessionStage.completed,
+      'canceled' => SessionStage.canceled,
+      _ => SessionStage.upcoming,
+    };
   }
 }

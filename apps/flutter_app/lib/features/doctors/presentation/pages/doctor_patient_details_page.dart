@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:rom_tracker_app/core/constants/app_colors.dart';
+import 'package:rom_tracker_app/core/network/backend_client.dart';
 import 'package:rom_tracker_app/features/chat/presentation/pages/chat_detail_page.dart';
+import 'package:rom_tracker_app/features/sessions/data/backend_sessions_api.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/doctor_session_entry.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/doctor_session_store.dart';
 import 'package:rom_tracker_app/features/sessions/presentation/models/local_demo_sync_store.dart';
@@ -216,9 +218,17 @@ class _DoctorPatientDetailsPageState extends State<DoctorPatientDetailsPage> {
                 SizedBox(height: 10.h),
                 SizedBox(
                   width: double.infinity,
-                  child: OutlinedButton(
-                    onPressed: () {
-                      LocalDemoSyncStore.doctorCancelUpcoming(session.id);
+                      child: OutlinedButton(
+                    onPressed: () async {
+                      try {
+                        await LocalDemoSyncStore.doctorCancelUpcoming(session.id);
+                      } catch (error) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(error.toString())),
+                        );
+                        return;
+                      }
                       if (!mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
@@ -272,12 +282,34 @@ class _DoctorPatientDetailsPageState extends State<DoctorPatientDetailsPage> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () {
-                    DoctorSessionStore.updateNotes(
-                      stage: session.stage,
-                      id: session.id,
-                      notes: _notesController.text.trim(),
-                    );
+                  onPressed: () async {
+                    if (BackendClient.instance.isConfigured) {
+                      final result =
+                          await BackendSessionsApi.instance.updateSessionStatus(
+                        sessionId: session.id,
+                        status: _statusValue(session.stage),
+                        doctorNotes: _notesController.text.trim(),
+                      );
+                      if (result.isFailure) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              result.failure?.message ?? 'Failed to save notes',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      await DoctorSessionStore.refreshFromBackend();
+                    } else {
+                      DoctorSessionStore.updateNotes(
+                        stage: session.stage,
+                        id: session.id,
+                        notes: _notesController.text.trim(),
+                      );
+                    }
+                    if (!mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Notes updated')),
                     );
@@ -307,34 +339,59 @@ class _DoctorPatientDetailsPageState extends State<DoctorPatientDetailsPage> {
   }
 
   void _handlePrimaryAction(DoctorSessionEntry session) {
-    switch (session.stage) {
-      case DoctorSessionStage.upcoming:
-        LocalDemoSyncStore.doctorCompleteUpcoming(session.id);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Session marked as completed')),
-        );
-        Navigator.pop(context);
-        break;
+    _handlePrimaryActionAsync(session);
+  }
+
+  Future<void> _handlePrimaryActionAsync(DoctorSessionEntry session) async {
+    try {
+      switch (session.stage) {
+        case DoctorSessionStage.upcoming:
+          await LocalDemoSyncStore.doctorCompleteUpcoming(session.id);
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Session marked as completed')),
+          );
+          Navigator.pop(context);
+          return;
+        case DoctorSessionStage.completed:
+          await LocalDemoSyncStore.doctorRestoreToUpcoming(
+            fromStage: DoctorSessionStage.completed,
+            doctorSessionId: session.id,
+          );
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Session moved back to upcoming')),
+          );
+          Navigator.pop(context);
+          return;
+        case DoctorSessionStage.canceled:
+          await LocalDemoSyncStore.doctorRestoreToUpcoming(
+            fromStage: DoctorSessionStage.canceled,
+            doctorSessionId: session.id,
+          );
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Session rescheduled to upcoming')),
+          );
+          Navigator.pop(context);
+          return;
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    }
+  }
+
+  String _statusValue(DoctorSessionStage stage) {
+    switch (stage) {
       case DoctorSessionStage.completed:
-        LocalDemoSyncStore.doctorRestoreToUpcoming(
-          fromStage: DoctorSessionStage.completed,
-          doctorSessionId: session.id,
-        );
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Session moved back to upcoming')),
-        );
-        Navigator.pop(context);
-        break;
+        return 'completed';
       case DoctorSessionStage.canceled:
-        LocalDemoSyncStore.doctorRestoreToUpcoming(
-          fromStage: DoctorSessionStage.canceled,
-          doctorSessionId: session.id,
-        );
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Session rescheduled to upcoming')),
-        );
-        Navigator.pop(context);
-        break;
+        return 'canceled';
+      case DoctorSessionStage.upcoming:
+        return 'upcoming';
     }
   }
 }
